@@ -1,0 +1,61 @@
+body { 
+    font-family: Arial, sans-serif; 
+    max-width: 800px; 
+    margin: 0 auto; 
+    padding: 20px; 
+}
+
+.section { 
+    margin: 20px 0; 
+    padding: 15px; 
+    border: 1px solid #ddd; 
+    border-radius: 5px; 
+}
+
+input, button, textarea { 
+    margin: 5px; 
+    padding: 8px; 
+}
+
+button { 
+    background: #007cba; 
+    color: white; 
+    border: none; 
+    cursor: pointer; 
+    border-radius: 3px; 
+}
+
+button:hover { 
+    background: #005a87; 
+}
+
+.response { 
+    background: #f5f5f5; 
+    padding: 10px; 
+    margin: 10px 0; 
+    border-radius: 3px; 
+}
+
+#chatHistory { 
+    height: 300px; 
+    overflow-y: scroll; 
+    border: 1px solid #ccc; 
+    padding: 10px; 
+    background: white; 
+}
+
+.message { 
+    margin-bottom: 10px; 
+}
+
+.user-message { 
+    color: #0066cc; 
+}
+
+.ai-message { 
+    color: #333; 
+}
+
+.error-message { 
+    color: #cc0000; 
+}

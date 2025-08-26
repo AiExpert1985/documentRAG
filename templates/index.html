@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Document RAG Interface</title>
+    <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+    <h1>Document RAG System</h1>
+    
+    <div class="section">
+        <h3>Upload PDF</h3>
+        <input type="file" id="pdfFile" accept=".pdf">
+        <button onclick="uploadPDF()">Upload & Process PDF</button>
+        <div id="uploadStatus"></div>
+    </div>
+
+    <div class="section">
+        <h3>Chat with Document</h3>
+        <div id="chatHistory"></div>
+        <input type="text" id="chatInput" placeholder="Ask a question" style="width: 70%;">
+        <button onclick="askQuestion()">Ask</button>
+    </div>
+
+    <div class="section">
+        <h3>System Status</h3>
+        <button onclick="getStatus()">Check Status</button>
+        <div id="statusInfo"></div>
+    </div>
+
+    <script src="/static/app.js"></script>
+</body>
+</html>
