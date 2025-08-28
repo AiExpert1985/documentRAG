@@ -1,7 +1,7 @@
 # api/endpoints.py
-
 from fastapi import APIRouter, UploadFile, File, HTTPException
 from fastapi.responses import HTMLResponse
+from typing import Dict, Union, Any
 import tempfile
 import os
 from services.rag_service import RAGService
@@ -13,44 +13,18 @@ rag_service: RAGService = RAGService()
 llm_service: LLMService = LLMService()
 
 @router.post("/chat")
-@router.post("/chat")
-def chat_endpoint(request: ChatRequest):
-    # Check if user is trying to ask about documents without uploading
-    if not rag_service.processed_chunks and any(word in request.prompt.lower() for word in ['document', 'pdf', 'file', 'text', 'content']):
-        return {
-            "answer": "You didn't upload any PDF. Please upload a document first before asking questions about it.",
-            "status": "success"
-        }
-    
-    # For general chat without PDF context
+def chat_endpoint(request: ChatRequest) -> Dict[str, Union[str, Any]]:
+    """General chat with LLM (no PDF context)"""
     return llm_service.chat(request.prompt)
 
-@router.post("/upload-pdf")
-async def upload_pdf(file: UploadFile = File(...)):
-    if not file.filename or not file.filename.endswith('.pdf'):
-        raise HTTPException(status_code=400, detail="Only PDF files are supported")
-    
-    try:
-        with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as temp_file:
-            content = await file.read()
-            temp_file.write(content)
-            temp_path = temp_file.name
-        
-        result = rag_service.process_pdf_file(temp_path)
-        os.unlink(temp_path)
-        return result
-    except Exception as e:
-        if 'temp_path' in locals():
-            try:
-                os.unlink(temp_path)
-            except:
-                pass
-        return {"error": str(e), "status": "error"}
-
-@router.post("/query-pdf")
-def query_pdf(request: QueryRequest):
+@router.post("/chat-pdf")
+def chat_with_pdf(request: QueryRequest) -> Dict[str, Union[str, Any]]:
+    """Smart chat with PDF context or friendly message if no PDF"""
     if not rag_service.processed_chunks:
-        return {"error": "No PDF loaded. Upload a PDF first.", "status": "error"}
+        return {
+            "answer": "You haven't uploaded any PDF yet. Please upload a document first to chat with it, or I can help you with general questions!",
+            "status": "success"
+        }
     
     relevant_chunks = rag_service.search_chunks(request.question)
     context = "\n\n".join(relevant_chunks)
@@ -73,8 +47,37 @@ Answer:"""
     
     return result
 
+@router.post("/upload-pdf")
+async def upload_pdf(file: UploadFile = File(...)) -> Dict[str, Union[str, int]]:
+    """Upload and process PDF file"""
+    if not file.filename or not file.filename.endswith('.pdf'):
+        raise HTTPException(status_code=400, detail="Only PDF files are supported")
+    
+    try:
+        with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as temp_file:
+            content: bytes = await file.read()
+            temp_file.write(content)
+            temp_path: str = temp_file.name
+        
+        result = rag_service.process_pdf_file(temp_path)
+        os.unlink(temp_path)
+        return result
+    except Exception as e:
+        if 'temp_path' in locals():
+            try:
+                os.unlink(temp_path)
+            except:
+                pass
+        return {"error": str(e), "status": "error"}
+
+@router.post("/process-local-pdf")
+def process_local_pdf(request: LocalPDFRequest) -> Dict[str, Union[str, int]]:
+    """Process PDF file from local file system"""
+    return rag_service.process_pdf_file(request.pdf_path)
+
 @router.get("/status")
-def get_status():
+def get_status() -> Dict[str, Union[str, int, bool]]:
+    """Get current system status"""
     return {
         "document_loaded": rag_service.current_document,
         "chunks_available": len(rag_service.processed_chunks),
@@ -82,6 +85,15 @@ def get_status():
     }
 
 @router.get("/", response_class=HTMLResponse)
-async def serve_interface():
-    with open("templates/index.html", "r") as f:
-        return HTMLResponse(content=f.read())
+async def serve_interface() -> HTMLResponse:
+    """Serve the web interface"""
+    try:
+        with open("templates/index.html", "r", encoding="utf-8") as f:
+            return HTMLResponse(content=f.read())
+    except FileNotFoundError:
+        return HTMLResponse(content="""
+        <html><body>
+        <h1>Error: templates/index.html not found</h1>
+        <p>Please ensure the templates directory exists with index.html</p>
+        </body></html>
+        """, status_code=500)

@@ -1,32 +1,45 @@
 <!DOCTYPE html>
 <html>
+
 <head>
     <title>Document RAG Interface</title>
     <link rel="stylesheet" href="/static/styles.css">
 </head>
+
 <body>
-    <h1>Document RAG System</h1>
-    
+    <div class="header">
+        <h1>Document RAG System</h1>
+        <div id="connectionStatus" class="status-indicator">Connecting...</div>
+    </div>
+
     <div class="section">
         <h3>Upload PDF</h3>
-        <input type="file" id="pdfFile" accept=".pdf">
-        <button onclick="uploadPDF()">Upload & Process PDF</button>
+        <div class="upload-area">
+            <input type="file" id="pdfFile" accept=".pdf">
+            <button onclick="uploadPDF()" class="primary-btn">Upload & Process PDF</button>
+        </div>
         <div id="uploadStatus"></div>
     </div>
 
-    <div class="section">
-        <h3>Chat with Document</h3>
-        <div id="chatHistory"></div>
-        <input type="text" id="chatInput" placeholder="Ask a question" style="width: 70%;">
-        <button onclick="askQuestion()">Ask</button>
+    <div class="section chat-section">
+        <div class="chat-header">
+            <h3>Smart Chat</h3>
+            <div id="modeIndicator" class="mode-indicator">General Mode</div>
+        </div>
+        <div id="chatHistory" class="chat-history"></div>
+        <div class="chat-input-container">
+            <input type="text" id="chatInput" placeholder="Ask anything..." class="chat-input">
+            <button onclick="askQuestion()" class="send-btn">Send</button>
+        </div>
     </div>
 
-    <div class="section">
+    <div class="section status-section">
         <h3>System Status</h3>
-        <button onclick="getStatus()">Check Status</button>
+        <button onclick="getStatus()" class="secondary-btn">Refresh Status</button>
         <div id="statusInfo"></div>
     </div>
 
     <script src="/static/app.js"></script>
 </body>
+
 </html>
