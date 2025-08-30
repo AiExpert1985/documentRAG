@@ -6,6 +6,12 @@ from typing import Optional
 class ChatRequest(BaseModel):
     prompt: str
 
+
+class ChatResponse(BaseModel):
+    status: str
+    answer: Optional[str] = None
+    error: Optional[str] = None
+
 class QueryRequest(BaseModel):
     question: str
 

@@ -1,12 +1,10 @@
 const API_BASE = window.location.origin;
 let isTyping = false;
-let currentMode = 'general';
 
 // Initialize the application
 window.onload = function () {
     checkConnection();
     getStatus();
-    updateModeIndicator();
 }
 
 // Check server connection
@@ -61,24 +59,49 @@ async function uploadPDF() {
         });
 
         const result = await response.json();
-        document.getElementById('uploadStatus').innerHTML =
-            `<div class="response">${JSON.stringify(result, null, 2)}</div>`;
 
         if (result.status === 'success') {
-            addToChat('System', `PDF "${result.filename}" processed successfully! (${result.pages} pages, ${result.chunks} chunks)`, 'system-message');
+            document.getElementById('uploadStatus').innerHTML =
+                `<div class="response success">✅ ${result.message}</div>`;
+
+            addToChat('System',
+                `PDF "${result.filename}" processed successfully! (${result.pages} pages, ${result.chunks} chunks). You can now ask questions about this document.`,
+                'system-message success'
+            );
+
             getStatus();
-            updateModeIndicator();
+
+            // Clear file input
+            fileInput.value = '';
+
+            // Focus on chat input
+            document.getElementById('chatInput').focus();
+
+        } else {
+            document.getElementById('uploadStatus').innerHTML =
+                `<div class="response error">❌ Error: ${result.error}</div>`;
+
+            addToChat('System',
+                `Upload failed: ${result.error}`,
+                'system-message error'
+            );
         }
+
     } catch (error) {
         document.getElementById('uploadStatus').innerHTML =
-            `<div class="response">Error: ${error.message}</div>`;
+            `<div class="response error">❌ Connection Error: ${error.message}</div>`;
+
+        addToChat('System',
+            `Upload failed due to connection error: ${error.message}`,
+            'system-message error'
+        );
     } finally {
         uploadButton.textContent = originalText;
         uploadButton.disabled = false;
     }
 }
 
-// Smart chat function that automatically decides between general chat and PDF chat
+// Unified chat function
 async function askQuestion() {
     if (isTyping) return;
 
@@ -95,35 +118,14 @@ async function askQuestion() {
 
     // Set typing state
     isTyping = true;
-    const typingIndicator = addToChat('AI', 'Thinking...', 'ai-message');
+    const typingIndicator = addToChat('AI', '💭 Thinking...', 'ai-message typing');
 
     try {
-        // Check current system status to determine chat mode
-        const statusResponse = await fetch(`${API_BASE}/status`);
-        const status = await statusResponse.json();
-
-        let endpoint, payload, mode;
-
-
-        if (status.ready_for_queries) {
-            endpoint = '/chat-pdf';  // Changed from '/query-pdf'
-            payload = { question: question };
-        } else {
-            endpoint = '/chat';
-            payload = { prompt: question };
-        }
-
-        // Update mode if changed
-        if (mode !== currentMode) {
-            currentMode = mode;
-            updateModeIndicator();
-        }
-
-        // Make API call
-        const response = await fetch(`${API_BASE}${endpoint}`, {
+        // Single endpoint call
+        const response = await fetch(`${API_BASE}/chat`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(payload)
+            body: JSON.stringify({ question: question })
         });
 
         const result = await response.json();
@@ -131,49 +133,44 @@ async function askQuestion() {
         // Remove typing indicator
         typingIndicator.remove();
 
-        // Add AI response
+        // Handle different response types
         if (result.status === 'success') {
             let message = result.answer;
             if (result.document && result.chunks_used) {
-                message += `\n\n(Source: ${result.document}, ${result.chunks_used} chunks used)`;
+                message += `\n\n📄 Source: ${result.document} (${result.chunks_used} sections analyzed)`;
             }
-            addToChat('AI', message, 'ai-message');
-        } else if (result.status === 'no_pdf') {
-            addToChat('AI', result.answer, 'ai-message');
+            addToChat('AI', message, 'ai-message success');
+
+        } else if (result.status === 'no_document') {
+            addToChat('AI',
+                `📋 ${result.error}\n\nOnce you upload a document, I'll be able to answer questions about its content!`,
+                'ai-message no-document'
+            );
+
+            // Highlight upload section
+            highlightUploadSection();
+
         } else {
-            addToChat('Error', result.error, 'error-message');
+            addToChat('AI',
+                `❌ ${result.error}`,
+                'ai-message error'
+            );
         }
 
     } catch (error) {
         // Remove typing indicator
         if (typingIndicator) typingIndicator.remove();
-        addToChat('Error', `Connection error: ${error.message}`, 'error-message');
+
+        addToChat('System',
+            `🔌 Connection error: ${error.message}`,
+            'system-message error'
+        );
+
     } finally {
         isTyping = false;
+        // Focus back on input
+        document.getElementById('chatInput').focus();
     }
-}
-
-// Update mode indicator
-function updateModeIndicator() {
-    const indicator = document.getElementById('modeIndicator');
-
-    fetch(`${API_BASE}/status`)
-        .then(response => response.json())
-        .then(status => {
-            if (status.ready_for_queries) {
-                indicator.textContent = `PDF Mode (${status.document_loaded})`;
-                indicator.className = 'mode-indicator pdf';
-                currentMode = 'pdf';
-            } else {
-                indicator.textContent = 'General Mode';
-                indicator.className = 'mode-indicator general';
-                currentMode = 'general';
-            }
-        })
-        .catch(() => {
-            indicator.textContent = 'Unknown Mode';
-            indicator.className = 'mode-indicator';
-        });
 }
 
 // Get system status
@@ -185,16 +182,44 @@ async function getStatus() {
         let statusHtml = '<div class="response">';
         statusHtml += `Document Loaded: ${result.document_loaded || 'None'}\n`;
         statusHtml += `Chunks Available: ${result.chunks_available}\n`;
-        statusHtml += `Ready for PDF Queries: ${result.ready_for_queries ? 'Yes' : 'No'}`;
+        statusHtml += `Ready for Queries: ${result.ready_for_queries ? 'Yes' : 'No'}`;
         statusHtml += '</div>';
 
         document.getElementById('statusInfo').innerHTML = statusHtml;
+
+        // Update document indicator
+        updateDocumentIndicator(result);
+
         updateConnectionStatus(true);
+
     } catch (error) {
         document.getElementById('statusInfo').innerHTML =
-            `<div class="response">Error: ${error.message}</div>`;
+            `<div class="response error">Error: ${error.message}</div>`;
         updateConnectionStatus(false);
     }
+}
+
+// Update document status indicator
+function updateDocumentIndicator(status) {
+    const indicator = document.getElementById('documentIndicator');
+
+    if (status.ready_for_queries) {
+        indicator.textContent = `📄 ${status.document_loaded} (${status.chunks_available} chunks)`;
+        indicator.className = 'document-indicator loaded';
+    } else {
+        indicator.textContent = '📋 No document loaded';
+        indicator.className = 'document-indicator empty';
+    }
+}
+
+// Highlight upload section
+function highlightUploadSection() {
+    const uploadSection = document.querySelector('.upload-section');
+    uploadSection.classList.add('highlight');
+
+    setTimeout(() => {
+        uploadSection.classList.remove('highlight');
+    }, 3000);
 }
 
 // Add message to chat history
@@ -204,9 +229,16 @@ function addToChat(sender, message, cssClass) {
     messageDiv.className = `message ${cssClass}`;
 
     if (sender === 'System') {
-        messageDiv.innerHTML = message;
+        messageDiv.innerHTML = `<div class="system-content">${message}</div>`;
     } else {
-        messageDiv.innerHTML = `<strong>${sender}:</strong><br>${message}`;
+        const senderClass = sender === 'You' ? 'user-sender' : 'ai-sender';
+        messageDiv.innerHTML = `
+            <div class="message-header">
+                <strong class="${senderClass}">${sender}</strong>
+                <span class="timestamp">${new Date().toLocaleTimeString()}</span>
+            </div>
+            <div class="message-content">${message.replace(/\n/g, '<br>')}</div>
+        `;
     }
 
     chatHistory.appendChild(messageDiv);
@@ -229,3 +261,10 @@ setInterval(() => {
         checkConnection();
     }
 }, 30000);
+
+// Clear chat history
+function clearChat() {
+    const chatHistory = document.getElementById('chatHistory');
+    chatHistory.innerHTML = '';
+    addToChat('System', 'Chat history cleared. Ready for new questions!', 'system-message');
+}

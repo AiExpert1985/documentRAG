@@ -1,35 +1,71 @@
 # api/endpoints.py
 from fastapi import APIRouter, UploadFile, File, HTTPException
 from fastapi.responses import HTMLResponse
-from typing import Dict, Union, Any
+from pydantic import BaseModel
+from typing import Optional
 import tempfile
 import os
 from services.rag_service import RAGService
 from services.llm_service import LLMService
-from api.models import ChatRequest, QueryRequest, LocalPDFRequest
 
 router: APIRouter = APIRouter()
 rag_service: RAGService = RAGService()
 llm_service: LLMService = LLMService()
 
-@router.post("/chat")
-def chat_endpoint(request: ChatRequest) -> Dict[str, Union[str, Any]]:
-    """General chat with LLM (no PDF context)"""
-    return llm_service.chat(request.prompt)
+# Pydantic Response Models
+class ChatResponse(BaseModel):
+    status: str
+    answer: Optional[str] = None
+    error: Optional[str] = None
+    document: Optional[str] = None
+    chunks_used: Optional[int] = None
 
-@router.post("/chat-pdf")
-def chat_with_pdf(request: QueryRequest) -> Dict[str, Union[str, Any]]:
-    """Smart chat with PDF context or friendly message if no PDF"""
-    if not rag_service.processed_chunks:
-        return {
-            "answer": "You haven't uploaded any PDF yet. Please upload a document first to chat with it, or I can help you with general questions!",
-            "status": "success"
-        }
+class UploadResponse(BaseModel):
+    status: str
+    filename: Optional[str] = None
+    pages: Optional[int] = None
+    chunks: Optional[int] = None
+    message: Optional[str] = None
+    error: Optional[str] = None
+
+class StatusResponse(BaseModel):
+    document_loaded: Optional[str] = None
+    chunks_available: int = 0
+    ready_for_queries: bool = False
+
+# Request Models
+class ChatRequest(BaseModel):
+    question: str
+
+class LocalPDFRequest(BaseModel):
+    pdf_path: str
+
+@router.post("/chat", response_model=ChatResponse)
+def chat_endpoint(request: ChatRequest) -> ChatResponse:
+    """Single chat endpoint - requires PDF to be uploaded first"""
     
-    relevant_chunks = rag_service.search_chunks(request.question)
-    context = "\n\n".join(relevant_chunks)
+    # Check if documents are loaded
+    if not rag_service.has_documents():
+        return ChatResponse(
+            status="no_document",
+            error="Please upload a PDF document first. I'm designed to answer questions about uploaded documents."
+        )
     
-    prompt = f"""Based on the following context from the document "{rag_service.current_document}", answer the question.
+    try:
+        # Search for relevant chunks
+        relevant_chunks = rag_service.search_chunks(request.question)
+        
+        if not relevant_chunks:
+            return ChatResponse(
+                status="error",
+                error="No relevant content found in the document for your question."
+            )
+        
+        # Build context from chunks
+        context = "\n\n".join(relevant_chunks)
+        
+        # Create prompt with context
+        prompt = f"""Based on the following context from the document "{rag_service.current_document}", answer the question accurately and concisely.
 
 Context:
 {context}
@@ -37,52 +73,125 @@ Context:
 Question: {request.question}
 
 Answer:"""
-    
-    result = llm_service.chat(prompt)
-    if result["status"] == "success":
-        result.update({
-            "document": rag_service.current_document,
-            "chunks_used": len(relevant_chunks)
-        })
-    
-    return result
+        
+        # Get LLM response
+        result = llm_service.chat(prompt)
+        
+        if result["status"] == "success":
+            return ChatResponse(
+                status="success",
+                answer=result["answer"],
+                document=rag_service.current_document,
+                chunks_used=len(relevant_chunks)
+            )
+        else:
+            return ChatResponse(
+                status="error",
+                error=f"LLM error: {result.get('error', 'Unknown error')}"
+            )
+            
+    except Exception as e:
+        return ChatResponse(
+            status="error",
+            error=f"Processing error: {str(e)}"
+        )
 
-@router.post("/upload-pdf")
-async def upload_pdf(file: UploadFile = File(...)) -> Dict[str, Union[str, int]]:
+@router.post("/upload-pdf", response_model=UploadResponse)
+async def upload_pdf(file: UploadFile = File(...)) -> UploadResponse:
     """Upload and process PDF file"""
-    if not file.filename or not file.filename.endswith('.pdf'):
-        raise HTTPException(status_code=400, detail="Only PDF files are supported")
     
+    # Validation
+    if not file.filename or not file.filename.endswith('.pdf'):
+        return UploadResponse(
+            status="error",
+            error="Only PDF files are supported"
+        )
+    
+    if file.size and file.size > 50_000_000:  # 50MB limit
+        return UploadResponse(
+            status="error",
+            error="File too large. Maximum size is 50MB"
+        )
+    
+    temp_path = None
     try:
+        # Save uploaded file temporarily
         with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as temp_file:
             content: bytes = await file.read()
             temp_file.write(content)
-            temp_path: str = temp_file.name
+            temp_path = temp_file.name
         
+        # Process PDF
         result = rag_service.process_pdf_file(temp_path)
-        os.unlink(temp_path)
-        return result
+        
+        if result["status"] == "success":
+            return UploadResponse(
+                status="success",
+                filename=result["filename"],
+                pages=result["pages"],
+                chunks=result["chunks"],
+                message=result["message"]
+            )
+        else:
+            return UploadResponse(
+                status="error",
+                error=result["error"]
+            )
+            
     except Exception as e:
-        if 'temp_path' in locals():
+        return UploadResponse(
+            status="error",
+            error=f"Upload failed: {str(e)}"
+        )
+    finally:
+        # Cleanup temporary file
+        if temp_path and os.path.exists(temp_path):
             try:
                 os.unlink(temp_path)
             except:
                 pass
-        return {"error": str(e), "status": "error"}
 
-@router.post("/process-local-pdf")
-def process_local_pdf(request: LocalPDFRequest) -> Dict[str, Union[str, int]]:
+@router.post("/process-local-pdf", response_model=UploadResponse)
+def process_local_pdf(request: LocalPDFRequest) -> UploadResponse:
     """Process PDF file from local file system"""
-    return rag_service.process_pdf_file(request.pdf_path)
+    
+    if not os.path.exists(request.pdf_path):
+        return UploadResponse(
+            status="error",
+            error="File not found"
+        )
+    
+    try:
+        result = rag_service.process_pdf_file(request.pdf_path)
+        
+        if result["status"] == "success":
+            return UploadResponse(
+                status="success",
+                filename=result["filename"],
+                pages=result["pages"],
+                chunks=result["chunks"],
+                message=result["message"]
+            )
+        else:
+            return UploadResponse(
+                status="error",
+                error=result["error"]
+            )
+            
+    except Exception as e:
+        return UploadResponse(
+            status="error",
+            error=f"Processing failed: {str(e)}"
+        )
 
-@router.get("/status")
-def get_status() -> Dict[str, Union[str, int, bool]]:
+@router.get("/status", response_model=StatusResponse)
+def get_status() -> StatusResponse:
     """Get current system status"""
-    return {
-        "document_loaded": rag_service.current_document,
-        "chunks_available": len(rag_service.processed_chunks),
-        "ready_for_queries": len(rag_service.processed_chunks) > 0
-    }
+    return StatusResponse(
+        document_loaded=rag_service.current_document,
+        chunks_available=len(rag_service.processed_chunks),
+        ready_for_queries=rag_service.has_documents()
+    )
 
 @router.get("/", response_class=HTMLResponse)
 async def serve_interface() -> HTMLResponse:
