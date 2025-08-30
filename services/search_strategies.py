@@ -66,33 +66,43 @@ class SemanticSearch(SearchStrategy):
     
     def __init__(self):
         self.embeddings_model = None
-        self.vector_db = None
+        self.client = None
         self.collection = None
         
         if SEMANTIC_SEARCH_AVAILABLE:
             try:
                 self.embeddings_model = SentenceTransformer('all-MiniLM-L6-v2')
-                self.client = chromadb.Client()
+                # Use persistent storage instead of in-memory
+                self.client = chromadb.PersistentClient(path="./vector_db")
+                print("✅ Semantic search initialized with persistent storage")
             except Exception as e:
-                print(f"Failed to initialize semantic search: {e}")
+                print(f"❌ Failed to initialize semantic search: {e}")
     
     def setup_vector_store(self, chunks: List[Any]) -> bool:
-        """Setup vector database with chunk embeddings"""
+        """Setup vector database with chunk embeddings - called during PDF upload"""
         if not self.is_available():
             return False
         
         try:
-            # Create new collection (delete if exists)
+            collection_name = "rag_chunks"
+            
+            # Delete existing collection to avoid conflicts (for now)
             try:
-                self.client.delete_collection("rag_chunks")
+                self.client.delete_collection(collection_name)
+                print(f"🗑️ Cleared existing collection: {collection_name}")
             except:
                 pass
             
-            self.collection = self.client.create_collection("rag_chunks")
+            # Create fresh collection
+            self.collection = self.client.create_collection(collection_name)
+            print(f"📦 Created new collection: {collection_name}")
             
-            # Generate embeddings for all chunks
+            # Generate embeddings for all chunks (this takes time!)
             texts = [chunk.page_content for chunk in chunks]
+            print(f"🔄 Generating embeddings for {len(texts)} chunks...")
+            
             embeddings = self.embeddings_model.encode(texts)
+            print(f"✅ Generated {len(embeddings)} embeddings")
             
             # Store in vector database
             for i, (text, embedding) in enumerate(zip(texts, embeddings)):
@@ -102,10 +112,11 @@ class SemanticSearch(SearchStrategy):
                     ids=[f"chunk_{i}"]
                 )
             
+            print(f"💾 Stored {len(embeddings)} vectors in ChromaDB")
             return True
             
         except Exception as e:
-            print(f"Failed to setup vector store: {e}")
+            print(f"❌ Failed to setup vector store: {e}")
             return False
     
     def search(self, question: str, chunks: List[Any], top_k: int = 3) -> List[str]:
@@ -141,3 +152,19 @@ class SemanticSearch(SearchStrategy):
         return (SEMANTIC_SEARCH_AVAILABLE and 
                 self.embeddings_model is not None and
                 self.client is not None)
+
+# Future search strategies can be added here
+class HybridSearch(SearchStrategy):
+    """Combines keyword and semantic search (placeholder for future)"""
+    
+    def __init__(self):
+        self.keyword_search = KeywordSearch()
+        self.semantic_search = SemanticSearch()
+    
+    def search(self, question: str, chunks: List[Any], top_k: int = 3) -> List[str]:
+        # TODO: Implement hybrid search logic
+        # For now, just use semantic search
+        return self.semantic_search.search(question, chunks, top_k)
+    
+    def is_available(self) -> bool:
+        return self.semantic_search.is_available()

@@ -6,12 +6,8 @@ from langchain_community.document_loaders import PyPDFLoader
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from pathlib import Path
 
-from .search_strategies import (
-    SearchStrategy, 
-    SearchMethod, 
-    KeywordSearch, 
-    SemanticSearch
-)
+from services.search_strategies import  SearchStrategy, SearchMethod, KeywordSearch, SemanticSearch
+
 
 class RAGService:
     """Main service for RAG document processing and search"""
@@ -69,7 +65,7 @@ class RAGService:
         return len(self.processed_chunks) > 0
     
     def process_pdf_file(self, file_path: str) -> Dict[str, Union[str, int]]:
-        """Process PDF file into searchable chunks"""
+        """Process PDF file into searchable chunks and setup vector storage"""
         try:
             # Load PDF document
             loader: PyPDFLoader = PyPDFLoader(file_path)
@@ -88,24 +84,35 @@ class RAGService:
             if not chunks:
                 return {"error": "Failed to create chunks from document", "status": "error"}
             
-            # Store chunks
+            # Store chunks in memory
             self.processed_chunks = chunks
             self.current_document = Path(file_path).name
             
-            # Setup vector store if using semantic search
-            if (self.search_method == SearchMethod.SEMANTIC and 
-                isinstance(self._current_search_strategy, SemanticSearch)):
+            # CRITICAL: Setup vector database during upload
+            vector_setup_success = False
+            if isinstance(self._current_search_strategy, SemanticSearch):
+                print(f"Setting up semantic search vectors for {len(chunks)} chunks...")
                 vector_setup_success = self._current_search_strategy.setup_vector_store(chunks)
-                if not vector_setup_success:
-                    print("Warning: Failed to setup vector store, falling back to keyword search")
+                
+                if vector_setup_success:
+                    search_method_used = "semantic"
+                    print("✅ Semantic search vectors created successfully")
+                else:
+                    print("⚠️ Semantic search setup failed, falling back to keyword search")
+                    # Fallback to keyword search
                     self.set_search_method(SearchMethod.KEYWORD)
+                    search_method_used = "keyword (fallback)"
+            else:
+                search_method_used = "keyword"
+                print("Using keyword search (no vector setup needed)")
             
             return {
                 "status": "success",
                 "filename": self.current_document,
                 "pages": len(documents),
                 "chunks": len(chunks),
-                "message": f"PDF processed into {len(chunks)} searchable chunks using {self.search_method.value} search"
+                "message": f"PDF processed into {len(chunks)} searchable chunks using {search_method_used} search",
+                "search_method": search_method_used
             }
             
         except Exception as e:
