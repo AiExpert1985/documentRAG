@@ -1,17 +1,13 @@
-# services/rag_service.py
-"""Main RAG service for document processing and search orchestration"""
+# services/rag_service.py - Simple version
 
 from typing import List, Optional, Any, Dict, Union
 from langchain_community.document_loaders import PyPDFLoader
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from pathlib import Path
 
-from services.search_strategies import  SearchStrategy, SearchMethod, KeywordSearch, SemanticSearch
-
+from services.search_strategies import SearchMethod, KeywordSearch, SemanticSearch
 
 class RAGService:
-    """Main service for RAG document processing and search"""
-    
     def __init__(self, search_method: SearchMethod = SearchMethod.SEMANTIC) -> None:
         self.processed_chunks: List[Any] = []
         self.current_document: Optional[str] = None
@@ -20,116 +16,65 @@ class RAGService:
         self.keyword_search = KeywordSearch()
         self.semantic_search = SemanticSearch()
         
-        # Set default search method
+        # Set search method (defaults to semantic)
         self.search_method = search_method
-        self._current_search_strategy = self._get_search_strategy(search_method)
+        self._current_search_strategy = self._get_strategy(search_method)
     
-    def _get_search_strategy(self, method: SearchMethod) -> SearchStrategy:
-        """Get the appropriate search strategy"""
-        if method == SearchMethod.SEMANTIC and self.semantic_search.is_available():
+    def _get_strategy(self, method: SearchMethod):
+        """Get search strategy instance"""
+        if method == SearchMethod.SEMANTIC:
             return self.semantic_search
         else:
-            # Fallback to keyword search
             return self.keyword_search
     
-    def set_search_method(self, method: SearchMethod) -> bool:
-        """Change search method and return success status"""
-        strategy = self._get_search_strategy(method)
-        
-        if method == SearchMethod.SEMANTIC and not strategy.is_available():
-            print("Semantic search not available, using keyword search")
-            return False
-        
+    def set_search_method(self, method: SearchMethod) -> None:
+        """Change search method"""
         self.search_method = method
-        self._current_search_strategy = strategy
-        
-        # If switching to semantic and we have chunks, setup vector store
-        if (method == SearchMethod.SEMANTIC and 
-            self.processed_chunks and 
-            isinstance(strategy, SemanticSearch)):
-            return strategy.setup_vector_store(self.processed_chunks)
-        
-        return True
-    
-    def get_available_search_methods(self) -> List[SearchMethod]:
-        """Get list of available search methods"""
-        methods = [SearchMethod.KEYWORD]  # Always available
-        
-        if self.semantic_search.is_available():
-            methods.append(SearchMethod.SEMANTIC)
-        
-        return methods
+        self._current_search_strategy = self._get_strategy(method)
     
     def has_documents(self) -> bool:
-        """Check if any documents are loaded and processed"""
         return len(self.processed_chunks) > 0
     
     def process_pdf_file(self, file_path: str) -> Dict[str, Union[str, int]]:
-        """Process PDF file into searchable chunks and setup vector storage"""
         try:
             # Load PDF document
-            loader: PyPDFLoader = PyPDFLoader(file_path)
-            documents: List[Any] = loader.load()
+            loader = PyPDFLoader(file_path)
+            documents = loader.load()
             
             if not documents:
                 return {"error": "No content extracted from PDF", "status": "error"}
             
             # Split into chunks
-            text_splitter: RecursiveCharacterTextSplitter = RecursiveCharacterTextSplitter(
+            text_splitter = RecursiveCharacterTextSplitter(
                 chunk_size=1000,
                 chunk_overlap=200
             )
-            chunks: List[Any] = text_splitter.split_documents(documents)
+            chunks = text_splitter.split_documents(documents)
             
             if not chunks:
                 return {"error": "Failed to create chunks from document", "status": "error"}
             
-            # Store chunks in memory
+            # Store chunks
             self.processed_chunks = chunks
             self.current_document = Path(file_path).name
             
-            # CRITICAL: Setup vector database during upload
-            vector_setup_success = False
-            if isinstance(self._current_search_strategy, SemanticSearch):
-                print(f"Setting up semantic search vectors for {len(chunks)} chunks...")
-                vector_setup_success = self._current_search_strategy.setup_vector_store(chunks)
-                
-                if vector_setup_success:
-                    search_method_used = "semantic"
-                    print("✅ Semantic search vectors created successfully")
-                else:
-                    print("⚠️ Semantic search setup failed, falling back to keyword search")
-                    # Fallback to keyword search
-                    self.set_search_method(SearchMethod.KEYWORD)
-                    search_method_used = "keyword (fallback)"
-            else:
-                search_method_used = "keyword"
-                print("Using keyword search (no vector setup needed)")
+            # Setup vector store if using semantic search
+            if self.search_method == SearchMethod.SEMANTIC:
+                self.semantic_search.setup_vector_store(chunks)
             
             return {
                 "status": "success",
                 "filename": self.current_document,
                 "pages": len(documents),
                 "chunks": len(chunks),
-                "message": f"PDF processed into {len(chunks)} searchable chunks using {search_method_used} search",
-                "search_method": search_method_used
+                "message": f"PDF processed into {len(chunks)} searchable chunks using {self.search_method.value} search"
             }
             
         except Exception as e:
             return {"error": str(e), "status": "error"}
     
     def search_chunks(self, question: str, top_k: int = 3) -> List[str]:
-        """Search for relevant chunks using the current search strategy"""
         if not self.processed_chunks:
             return []
         
         return self._current_search_strategy.search(question, self.processed_chunks, top_k)
-    
-    def get_search_info(self) -> Dict[str, Any]:
-        """Get information about current search configuration"""
-        return {
-            "current_method": self.search_method.value,
-            "available_methods": [method.value for method in self.get_available_search_methods()],
-            "semantic_available": self.semantic_search.is_available(),
-            "chunks_loaded": len(self.processed_chunks)
-        }
