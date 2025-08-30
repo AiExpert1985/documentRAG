@@ -1,44 +1,21 @@
 # api/endpoints.py
 from fastapi import APIRouter, UploadFile, File, HTTPException
 from fastapi.responses import HTMLResponse
-from pydantic import BaseModel
-from typing import Optional
 import tempfile
 import os
 from services.rag_service import RAGService
 from services.llm_service import LLMService
+from api.types import (
+    ChatRequest, 
+    ChatResponse, 
+    UploadResponse, 
+    StatusResponse, 
+    LocalPDFRequest
+)
 
-router: APIRouter = APIRouter()
-rag_service: RAGService = RAGService()
-llm_service: LLMService = LLMService()
-
-# Pydantic Response Models
-class ChatResponse(BaseModel):
-    status: str
-    answer: Optional[str] = None
-    error: Optional[str] = None
-    document: Optional[str] = None
-    chunks_used: Optional[int] = None
-
-class UploadResponse(BaseModel):
-    status: str
-    filename: Optional[str] = None
-    pages: Optional[int] = None
-    chunks: Optional[int] = None
-    message: Optional[str] = None
-    error: Optional[str] = None
-
-class StatusResponse(BaseModel):
-    document_loaded: Optional[str] = None
-    chunks_available: int = 0
-    ready_for_queries: bool = False
-
-# Request Models
-class ChatRequest(BaseModel):
-    question: str
-
-class LocalPDFRequest(BaseModel):
-    pdf_path: str
+router = APIRouter()
+rag_service = RAGService()
+llm_service = LLMService()
 
 @router.post("/chat", response_model=ChatResponse)
 def chat_endpoint(request: ChatRequest) -> ChatResponse:
@@ -67,12 +44,12 @@ def chat_endpoint(request: ChatRequest) -> ChatResponse:
         # Create prompt with context
         prompt = f"""Based on the following context from the document "{rag_service.current_document}", answer the question accurately and concisely.
 
-Context:
-{context}
+                    Context:
+                    {context}
 
-Question: {request.question}
+                    Question: {request.question}
 
-Answer:"""
+                    Answer:"""
         
         # Get LLM response
         result = llm_service.chat(prompt)
