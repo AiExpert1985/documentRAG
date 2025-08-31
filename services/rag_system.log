@@ -7,3 +7,35 @@
 2025-08-31 21:22:27,727 - rag_system_logger - ERROR - retrieve failed: 'RAGService' object has no attribute '_current_search_strategy'
 2025-08-31 21:22:27,728 - rag_system_logger - ERROR - Chat endpoint error: 'RAGService' object has no attribute '_current_search_strategy'
 2025-08-31 21:56:00,294 - rag_system_logger - INFO - Logging configured successfully.
+2025-09-01 00:20:08,339 - rag_system_logger - INFO - Logging configured successfully.
+2025-09-01 00:21:02,906 - rag_system_logger - INFO - RAG service initialized
+2025-09-01 00:21:03,104 - rag_system_logger - INFO - RAG service initialized
+2025-09-01 00:21:04,451 - rag_system_logger - INFO - RAG service initialized
+2025-09-01 00:21:12,281 - rag_system_logger - INFO - RAG service initialized
+2025-09-01 00:21:19,217 - rag_system_logger - INFO - RAG service initialized
+2025-09-01 00:21:34,636 - rag_system_logger - INFO - RAG service initialized
+2025-09-01 00:21:50,198 - rag_system_logger - INFO - RAG service initialized
+2025-09-01 00:22:20,206 - rag_system_logger - INFO - RAG service initialized
+2025-09-01 00:22:50,219 - rag_system_logger - INFO - RAG service initialized
+2025-09-01 00:23:20,202 - rag_system_logger - INFO - RAG service initialized
+2025-09-01 00:23:50,202 - rag_system_logger - INFO - RAG service initialized
+2025-09-01 00:24:57,212 - rag_system_logger - INFO - RAG service initialized
+2025-09-01 00:25:57,221 - rag_system_logger - INFO - RAG service initialized
+2025-09-01 00:26:57,211 - rag_system_logger - INFO - RAG service initialized
+2025-09-01 00:27:57,212 - rag_system_logger - INFO - RAG service initialized
+2025-09-01 00:28:57,213 - rag_system_logger - INFO - RAG service initialized
+2025-09-01 00:29:57,210 - rag_system_logger - INFO - RAG service initialized
+2025-09-01 00:30:57,204 - rag_system_logger - INFO - RAG service initialized
+2025-09-01 00:31:57,205 - rag_system_logger - INFO - RAG service initialized
+2025-09-01 00:32:20,244 - rag_system_logger - INFO - RAG service initialized
+2025-09-01 00:32:50,208 - rag_system_logger - INFO - RAG service initialized
+2025-09-01 00:33:57,214 - rag_system_logger - INFO - RAG service initialized
+2025-09-01 00:34:57,254 - rag_system_logger - INFO - RAG service initialized
+2025-09-01 00:35:57,204 - rag_system_logger - INFO - RAG service initialized
+2025-09-01 00:36:57,218 - rag_system_logger - INFO - RAG service initialized
+2025-09-01 00:37:21,693 - rag_system_logger - INFO - RAG service initialized
+2025-09-01 00:37:50,664 - rag_system_logger - INFO - Logging configured successfully.
+2025-09-01 00:38:04,387 - rag_system_logger - INFO - RAG service initialized
+2025-09-01 00:38:07,864 - rag_system_logger - INFO - RAG service initialized
+2025-09-01 00:38:07,931 - rag_system_logger - INFO - RAG service initialized
+2025-09-01 00:38:09,762 - rag_system_logger - INFO - RAG service initialized

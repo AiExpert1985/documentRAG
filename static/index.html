@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Document RAG System</title>
+    <link rel="stylesheet" href="/static/styles.css">
+</head>
+
+<body>
+    <div class="header">
+        <h1>Document RAG System</h1>
+        <div class="header-status">
+            <div id="documentIndicator" class="document-indicator empty">📋 No document loaded</div>
+            <div id="connectionStatus" class="status-indicator">Connecting...</div>
+        </div>
+    </div>
+
+    <div class="section upload-section">
+        <div class="section-header">
+            <h3>Upload PDF Document</h3>
+            <button id="clearAllDocsBtn" class="secondary-btn">Clear All Documents</button>
+        </div>
+        <div class="upload-area">
+            <input type="file" id="pdfFile" accept=".pdf">
+            <button id="uploadPdfBtn" class="primary-btn">Upload & Process PDF</button>
+        </div>
+        <div id="uploadStatus"></div>
+        <div class="documents-list-container">
+            <h4>Loaded Documents</h4>
+            <ul id="documentsList" class="documents-list"></ul>
+        </div>
+    </div>
+
+    <div class="section chat-section">
+        <div class="chat-header">
+            <h3>Document Chat</h3>
+            <button id="clearChatBtn" class="secondary-btn">Clear Chat</button>
+        </div>
+
+        <div id="chatHistory" class="chat-history">
+            <div class="message system-message">
+                <div class="system-content">
+                    Welcome! Upload a PDF document to start asking questions about it.
+                </div>
+            </div>
+        </div>
+
+        <div class="chat-input-container">
+            <input type="text" id="chatInput" placeholder="Ask a question..." class="chat-input">
+            <button id="sendChatBtn" class="send-btn">Send</button>
+        </div>
+
+        <div class="chat-help">
+            <small>Example questions: "What is the main topic?", "Can you summarize this document?", "What are the
+                key findings?"</small>
+        </div>
+    </div>
+
+    <div class="section status-section">
+        <div class="status-header">
+            <h3>System Status</h3>
+            <button id="refreshStatusBtn" class="secondary-btn">Refresh</button>
+        </div>
+        <div id="statusInfo"></div>
+    </div>
+
+    <script src="/static/app.js"></script>
+</body>
+
+</html>

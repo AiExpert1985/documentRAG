@@ -4,7 +4,8 @@ from typing import List, Optional, Dict, Union, Any
 from langchain_community.document_loaders import PyPDFLoader
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 import uuid
-from sqlalchemy import select
+
+from sqlalchemy import select, delete
 
 from services.retrieval_strategies import RetrievalMethod, RetrievalStrategy, KeywordRetrieval, SemanticRetrieval, HybridRetrieval
 from services.config import LOGGER_NAME
@@ -13,24 +14,12 @@ from database.chat_db import AsyncSessionLocal, Message
 logger = logging.getLogger(LOGGER_NAME)
 
 class RAGService:
-    _instance = None
-    
-    def __new__(cls):
-        if cls._instance is None:
-            cls._instance = super().__new__(cls)
-            cls._instance._initialized = False
-        return cls._instance
-    
     def __init__(self, retrieval_method: RetrievalMethod = RetrievalMethod.SEMANTIC):
-        if self._initialized:
-            return
-            
         self._current_strategy: RetrievalStrategy = self._create_strategy(retrieval_method)
         self.retrieval_method = retrieval_method
         self.loaded_documents: Dict[str, str] = {}
-        self._initialized = True
         logger.info("RAG service initialized")
-            
+
     def _create_strategy(self, method: RetrievalMethod) -> RetrievalStrategy:
         if method == RetrievalMethod.SEMANTIC:
             return SemanticRetrieval()
@@ -38,13 +27,13 @@ class RAGService:
             return KeywordRetrieval()
         elif method == RetrievalMethod.HYBRID:
             return HybridRetrieval()
-    
+
     def has_documents(self) -> bool:
         return len(self.loaded_documents) > 0
-    
+
     def get_chunks_count(self) -> int:
         return self._current_strategy.get_chunks_count()
-    
+
     async def process_pdf_file(self, file_path: str, original_filename: str) -> Dict[str, Any]:
         document_id = str(uuid.uuid4())
         
@@ -80,7 +69,7 @@ class RAGService:
         except Exception as e:
             logger.error(f"Error processing PDF: {e}")
             return {"error": str(e), "status": "error"}
-    
+
     async def retrieve_chunks(self, question: str, top_k: int = 3) -> List[Dict]:
         if not self.has_documents():
             return []
@@ -90,7 +79,7 @@ class RAGService:
         except Exception as e:
             logger.error(f"Retrieval failed: {e}")
             return []
-    
+
     def get_status(self) -> Dict[str, Union[str, int, bool]]:
         return {
             "current_method": self.retrieval_method.value,

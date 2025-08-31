@@ -3,12 +3,34 @@ const API_BASE = window.location.origin;
 let isTyping = false;
 let loadedDocuments = {};
 
-window.onload = function () {
+document.addEventListener('DOMContentLoaded', () => {
     checkConnection();
     getStatus();
     listDocuments();
     loadChatHistory();
-}
+
+    // Add event listeners
+    document.getElementById('uploadPdfBtn').addEventListener('click', uploadPDF);
+    document.getElementById('sendChatBtn').addEventListener('click', askQuestion);
+    document.getElementById('chatInput').addEventListener('keypress', handleKeyPress);
+    document.getElementById('clearChatBtn').addEventListener('click', clearChat);
+    document.getElementById('clearAllDocsBtn').addEventListener('click', clearAllDocuments);
+    document.getElementById('refreshStatusBtn').addEventListener('click', getStatus);
+
+    // Use event delegation for the documents list
+    document.getElementById('documentsList').addEventListener('click', (e) => {
+        if (e.target.classList.contains('delete-btn')) {
+            deleteDocument(e.target.dataset.docId);
+        }
+    });
+
+    // Periodically check connection status
+    setInterval(() => {
+        if (!isTyping) {
+            checkConnection();
+        }
+    }, 30000);
+});
 
 async function checkConnection() {
     try {
@@ -43,7 +65,7 @@ async function uploadPDF() {
         return;
     }
 
-    const uploadButton = fileInput.nextElementSibling;
+    const uploadButton = document.getElementById('uploadPdfBtn');
     const originalText = uploadButton.textContent;
     uploadButton.innerHTML = '<span class="loading"></span> Processing...';
     uploadButton.disabled = true;
@@ -61,7 +83,7 @@ async function uploadPDF() {
 
         const result = await response.json();
 
-        if (result.status === 'success') {
+        if (response.ok) {
             document.getElementById('uploadStatus').innerHTML =
                 `<div class="response success">✅ ${result.message}</div>`;
 
@@ -72,17 +94,13 @@ async function uploadPDF() {
 
             getStatus();
             listDocuments();
-
             fileInput.value = '';
-
             document.getElementById('chatInput').focus();
-
         } else {
             document.getElementById('uploadStatus').innerHTML =
-                `<div class="response error">❌ Error: ${result.error}</div>`;
-
+                `<div class="response error">❌ Error: ${result.detail || 'An unknown error occurred'}</div>`;
             addToChat('System',
-                `Upload failed: ${result.error}`,
+                `Upload failed: ${result.detail || 'An unknown error occurred'}`,
                 'system-message error'
             );
         }
@@ -90,7 +108,6 @@ async function uploadPDF() {
     } catch (error) {
         document.getElementById('uploadStatus').innerHTML =
             `<div class="response error">❌ Connection Error: ${error.message}</div>`;
-
         addToChat('System',
             `Upload failed due to connection error: ${error.message}`,
             'system-message error'
@@ -104,15 +121,15 @@ async function uploadPDF() {
 async function askQuestion() {
     if (isTyping) return;
 
-    const question = document.getElementById('chatInput').value.trim();
+    const chatInput = document.getElementById('chatInput');
+    const question = chatInput.value.trim();
 
     if (!question) {
-        alert('Please enter a question');
         return;
     }
 
     addToChat('You', question, 'user-message');
-    document.getElementById('chatInput').value = '';
+    chatInput.value = '';
 
     isTyping = true;
     const typingIndicator = addToChat('AI', '💭 Thinking...', 'ai-message typing');
@@ -124,43 +141,43 @@ async function askQuestion() {
             body: JSON.stringify({ question: question })
         });
 
-        const result = await response.json();
+        if (!response.ok) {
+            const errorResult = await response.json();
+            if (typingIndicator) typingIndicator.remove();
+            if (response.status === 400) {
+                addToChat('AI',
+                    `📋 ${errorResult.detail}\n\nOnce you upload a document, I'll be able to answer questions about its content!`,
+                    'ai-message no-document'
+                );
+                highlightUploadSection();
+            } else {
+                addToChat('AI', `❌ ${errorResult.detail || 'An unknown error occurred'}`, 'ai-message error');
+            }
+            return;
+        }
 
+        const result = await response.json();
         if (typingIndicator) typingIndicator.remove();
 
-        if (result.status === 'success') {
-            let message = result.answer;
-            if (result.document && result.chunks_used) {
-                message += `\n\n📄 Sources: ${result.document}`;
-            }
-            addToChat('AI', message, 'ai-message success');
-
-        } else if (result.status === 'no_document') {
-            addToChat('AI',
-                `📋 ${result.error}\n\nOnce you upload a document, I'll be able to answer questions about its content!`,
-                'ai-message no-document'
-            );
-
-            highlightUploadSection();
-
-        } else {
-            addToChat('AI',
-                `❌ ${result.error}`,
-                'ai-message error'
-            );
+        let message = result.answer;
+        if (result.document && result.chunks_used) {
+            message += `\n\n📄 Sources: ${result.document}`;
         }
+        addToChat('AI', message, 'ai-message success');
 
     } catch (error) {
         if (typingIndicator) typingIndicator.remove();
-
-        addToChat('System',
-            `🔌 Connection error: ${error.message}`,
-            'system-message error'
-        );
-
+        addToChat('System', `🔌 Connection error: ${error.message}`, 'system-message error');
     } finally {
         isTyping = false;
         document.getElementById('chatInput').focus();
+    }
+}
+
+function handleKeyPress(e) {
+    if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        askQuestion();
     }
 }
 
@@ -168,19 +185,14 @@ async function getStatus() {
     try {
         const response = await fetch(`${API_BASE}/status`);
         const result = await response.json();
-
         let statusHtml = '<div class="response">';
         statusHtml += `Document(s) Loaded: ${result.document_loaded || 'None'}\n`;
         statusHtml += `Chunks Available: ${result.chunks_available}\n`;
         statusHtml += `Ready for Queries: ${result.ready_for_queries ? 'Yes' : 'No'}`;
         statusHtml += '</div>';
-
         document.getElementById('statusInfo').innerHTML = statusHtml;
-
         updateDocumentIndicator(result);
-
         updateConnectionStatus(true);
-
     } catch (error) {
         document.getElementById('statusInfo').innerHTML =
             `<div class="response error">Error: ${error.message}</div>`;
@@ -202,7 +214,7 @@ async function listDocuments() {
                 const li = document.createElement('li');
                 li.innerHTML = `
                     <span>${doc.filename}</span>
-                    <button class="delete-btn" onclick="deleteDocument('${doc.id}')">Delete</button>
+                    <button class="delete-btn" data-doc-id="${doc.id}">Delete</button>
                 `;
                 documentsList.appendChild(li);
                 loadedDocuments[doc.id] = doc.filename;
@@ -302,7 +314,6 @@ function updateDocumentIndicator(status) {
 function highlightUploadSection() {
     const uploadSection = document.querySelector('.upload-section');
     uploadSection.classList.add('highlight');
-
     setTimeout(() => {
         uploadSection.classList.remove('highlight');
     }, 3000);
@@ -331,19 +342,6 @@ function addToChat(sender, message, cssClass) {
 
     return messageDiv;
 }
-
-document.getElementById('chatInput').addEventListener('keypress', function (e) {
-    if (e.key === 'Enter' && !e.shiftKey) {
-        e.preventDefault();
-        askQuestion();
-    }
-});
-
-setInterval(() => {
-    if (!isTyping) {
-        checkConnection();
-    }
-}, 30000);
 
 function clearChat() {
     const chatHistory = document.getElementById('chatHistory');

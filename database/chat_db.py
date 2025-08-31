@@ -1,6 +1,6 @@
 # database/chat_db.py
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
-from sqlalchemy import Column, Integer, String, DateTime, select
+from sqlalchemy import Column, Integer, String, DateTime, select, delete
 from sqlalchemy.ext.declarative import declarative_base
 from datetime import datetime
 import hashlib
@@ -29,10 +29,6 @@ class FileHash(Base):
     hash_value = Column(String, unique=True, index=True)
     timestamp = Column(DateTime, default=datetime.utcnow)
 
-async def get_async_db():
-    async with AsyncSessionLocal() as session:
-        yield session
-
 def get_file_hash(file_content: bytes) -> str:
     return hashlib.sha256(file_content).hexdigest()
 
@@ -56,4 +52,19 @@ async def save_file_hash(file_hash: str) -> bool:
             return True
     except Exception as e:
         logger.error(f"Error saving file hash: {e}")
+        return False
+
+async def delete_file_hash(file_hash: str = None) -> bool:
+    try:
+        async with AsyncSessionLocal() as session:
+            if file_hash:
+                await session.execute(
+                    delete(FileHash).where(FileHash.hash_value == file_hash)
+                )
+            else:
+                await session.execute(delete(FileHash))
+            await session.commit()
+            return True
+    except Exception as e:
+        logger.error(f"Error deleting file hash: {e}")
         return False
