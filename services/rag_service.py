@@ -15,13 +15,13 @@ logger = logging.getLogger("rag_system_logger")
 class RAGService:
     """Main service for RAG document processing and search"""
     
-    def __init__(self, search_method: SearchMethod = SearchMethod.HYBRID) -> None:
+    def __init__(self, search_method: SearchMethod = SearchMethod.SEMANTIC) -> None:
         self.current_document: Optional[str] = None
         
         # Strategy objects - created only when needed (lazy loading)
         self._search_strategies: Dict[SearchMethod, SearchStrategy] = {}
         
-        # Set search method (defaults to hybrid)
+        # Set search method (defaults to semantic, not hybrid for stability)
         self.search_method = search_method
         self._current_search_strategy = self._get_strategy(search_method)
     
@@ -42,12 +42,6 @@ class RAGService:
     def get_search_method(self) -> SearchMethod:
         """Get current search method"""
         return self.search_method
-    
-    def set_search_method(self, method: SearchMethod) -> None:
-        """Change search method"""
-        self.search_method = method
-        self._current_search_strategy = self._get_strategy(method)
-        logger.info(f"Search method changed to: {method.value}")
     
     def has_documents(self) -> bool:
         """Check if any documents are loaded"""
@@ -77,19 +71,16 @@ class RAGService:
             if not chunks:
                 return {"error": "Failed to create chunks from document", "status": "error"}
             
-            # Setup document store (no longer storing chunks in memory)
+            # Setup document store using original interface (no document_name parameter)
             logger.info(f"Processing {len(chunks)} chunks using {self.search_method.value} search")
-            
-            # Pass document name to the setup method for persistence
-            document_name = Path(file_path).name
-            setup_success = self._current_search_strategy.setup_document_store(chunks, document_name)
+            setup_success = self._current_search_strategy.setup_document_store(chunks)
             
             if not setup_success:
                 logger.error("Failed to setup document store")
                 return {"error": "Failed to setup document storage", "status": "error"}
             
             # Only store document metadata, not the chunks themselves
-            self.current_document = document_name
+            self.current_document = Path(file_path).name
             
             return {
                 "status": "success",
@@ -115,20 +106,6 @@ class RAGService:
         except Exception as e:
             logger.error(f"Search failed: {e}")
             raise
-    
-    def clear_documents(self) -> Dict[str, Union[str, bool]]:
-        """Clear all processed documents"""
-        try:
-            success = self._current_search_strategy.clear_documents()
-            if success:
-                self.current_document = None
-                logger.info("All documents cleared successfully")
-                return {"status": "success", "message": "All documents cleared"}
-            else:
-                return {"status": "error", "error": "Failed to clear documents"}
-        except Exception as e:
-            logger.error(f"Error clearing documents: {e}")
-            return {"status": "error", "error": str(e)}
     
     def get_status(self) -> Dict[str, Union[str, int, bool]]:
         """Get detailed system status"""

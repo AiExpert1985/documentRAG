@@ -13,6 +13,8 @@ from api.types import (
     ChatResponse, 
     UploadResponse, 
     StatusResponse,
+    SearchMethodRequest,
+    ClearDocumentsResponse
 )
 
 # Use the logger configured by logger_config.py
@@ -48,10 +50,13 @@ def chat_endpoint(request: ChatRequest) -> ChatResponse:
         
         # Create prompt with context
         prompt = f"""Based on the following context from the document "{rag_service.current_document}", answer the question accurately and concisely.
-                Context:
-                {context}
-                Question: {request.question}
-                Answer:"""
+
+Context:
+{context}
+
+Question: {request.question}
+
+Answer:"""
         
         # Get LLM response
         result = llm_service.chat(prompt)
@@ -133,7 +138,6 @@ async def upload_pdf(file: UploadFile = File(...)) -> UploadResponse:
             except Exception as e:
                 logger.error(f"Failed to cleanup temp file: {e}")
 
-
 @router.get("/status", response_model=StatusResponse)
 def get_status() -> StatusResponse:
     """Get current system status"""
@@ -158,12 +162,13 @@ def get_status() -> StatusResponse:
 async def serve_interface() -> HTMLResponse:
     """Serve the web interface"""
     try:
+        # Fixed: consistent path with static mount
         with open("static/index.html", "r", encoding="utf-8") as f:
             return HTMLResponse(content=f.read())
     except FileNotFoundError:
         return HTMLResponse(content="""
         <html><body>
-        <h1>Error: templates/index.html not found</h1>
-        <p>Please ensure the templates directory exists with index.html</p>
+        <h1>Error: static/index.html not found</h1>
+        <p>Please ensure the static directory exists with index.html</p>
         </body></html>
         """, status_code=500)

@@ -4,9 +4,11 @@
 from pydantic import BaseModel
 from typing import Optional
 
+# Request Schemas
 class ChatRequest(BaseModel):
     question: str
 
+# Response Schemas
 class ChatResponse(BaseModel):
     status: str
     answer: Optional[str] = None
