@@ -3,22 +3,23 @@ import logging
 import tempfile
 import os
 from fastapi import APIRouter, UploadFile, File, HTTPException
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 
+from services.config import LOGGER_NAME
 from services.rag_service import RAGService
 from services.llm_service import LLMService
-from services.search_strategies import SearchMethod
+from services.retrieval_strategies import RetrievalMethod
+
 from api.types import (
     ChatRequest, 
     ChatResponse, 
     UploadResponse, 
     StatusResponse,
-    SearchMethodRequest,
-    ClearDocumentsResponse
+    DocumentsListResponse,
+    DeleteResponse
 )
 
-# Use the logger configured by logger_config.py
-logger = logging.getLogger("rag_system_logger")
+logger = logging.getLogger(LOGGER_NAME)
 
 router = APIRouter()
 rag_service = RAGService()
@@ -26,9 +27,6 @@ llm_service = LLMService()
 
 @router.post("/chat", response_model=ChatResponse)
 def chat_endpoint(request: ChatRequest) -> ChatResponse:
-    """Chat with loaded documents using current search strategy"""
-    
-    # Check if documents are loaded
     if not rag_service.has_documents():
         return ChatResponse(
             status="no_document",
@@ -36,36 +34,38 @@ def chat_endpoint(request: ChatRequest) -> ChatResponse:
         )
     
     try:
-        # Search for relevant chunks
-        relevant_chunks = rag_service.search_chunks(request.question)
+        relevant_chunks = rag_service.retrieval_chunks(request.question)
         
         if not relevant_chunks:
             return ChatResponse(
                 status="error",
-                error="No relevant content found in the document for your question."
+                error="No relevant content found in the documents for your question."
             )
+            
+        context = ""
+        sources = []
+        for chunk in relevant_chunks:
+            context += f"Source: {chunk['metadata']['document_name']}, Page: {chunk['metadata']['page']}\n{chunk['content']}\n\n"
+            sources.append(f"Source: {chunk['metadata']['document_name']}, p. {chunk['metadata']['page']}")
         
-        # Build context from chunks
-        context = "\n\n".join(relevant_chunks)
+        final_sources_str = ", ".join(sources)
+
+        prompt = f"""Based on the following context from the loaded documents, answer the question accurately and concisely. Include specific page numbers and source filenames for your answer.
+
+                Context:
+                {context}
+
+                Question: {request.question}
+
+                Answer:"""
         
-        # Create prompt with context
-        prompt = f"""Based on the following context from the document "{rag_service.current_document}", answer the question accurately and concisely.
-
-Context:
-{context}
-
-Question: {request.question}
-
-Answer:"""
-        
-        # Get LLM response
         result = llm_service.chat(prompt)
         
         if result["status"] == "success":
             return ChatResponse(
                 status="success",
                 answer=result["answer"],
-                document=rag_service.current_document,
+                document=final_sources_str,
                 chunks_used=len(relevant_chunks)
             )
         else:
@@ -83,16 +83,13 @@ Answer:"""
 
 @router.post("/upload-pdf", response_model=UploadResponse)
 async def upload_pdf(file: UploadFile = File(...)) -> UploadResponse:
-    """Upload and process PDF file"""
-    
-    # Validation
     if not file.filename or not file.filename.endswith('.pdf'):
         return UploadResponse(
             status="error",
             error="Only PDF files are supported"
         )
     
-    if file.size and file.size > 50_000_000:  # 50MB limit
+    if file.size and file.size > 50_000_000:
         return UploadResponse(
             status="error",
             error="File too large. Maximum size is 50MB"
@@ -100,13 +97,11 @@ async def upload_pdf(file: UploadFile = File(...)) -> UploadResponse:
     
     temp_path = None
     try:
-        # Save uploaded file temporarily
         with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as temp_file:
             content: bytes = await file.read()
             temp_file.write(content)
             temp_path = temp_file.name
         
-        # Process PDF
         result = rag_service.process_pdf_file(temp_path)
         
         if result["status"] == "success":
@@ -116,7 +111,7 @@ async def upload_pdf(file: UploadFile = File(...)) -> UploadResponse:
                 pages=result["pages"],
                 chunks=result["chunks"],
                 message=result["message"],
-                search_method=result["search_method"]
+                retrieval_method=result["retrieval_method"]
             )
         else:
             return UploadResponse(
@@ -131,16 +126,53 @@ async def upload_pdf(file: UploadFile = File(...)) -> UploadResponse:
             error=f"Upload failed: {str(e)}"
         )
     finally:
-        # Cleanup temporary file
         if temp_path and os.path.exists(temp_path):
             try:
                 os.unlink(temp_path)
             except Exception as e:
                 logger.error(f"Failed to cleanup temp file: {e}")
 
+@router.delete("/documents/{document_id}", response_model=DeleteResponse)
+def delete_document_endpoint(document_id: str):
+    """Delete a single document and its associated chunks"""
+    try:
+        success = rag_service.delete_document(document_id)
+        if success:
+            return DeleteResponse(
+                status="success",
+                message=f"Document with ID {document_id} and its chunks have been deleted."
+            )
+        else:
+            return DeleteResponse(
+                status="error",
+                message=f"Document with ID {document_id} not found."
+            )
+    except Exception as e:
+        logger.error(f"Error deleting document {document_id}: {e}")
+        raise HTTPException(status_code=500, detail=f"Error deleting document: {str(e)}")
+
+@router.delete("/documents", response_model=DeleteResponse)
+def clear_all_documents_endpoint():
+    """Clear all loaded documents and their associated chunks"""
+    try:
+        rag_service.clear_all_documents()
+        return DeleteResponse(
+            status="success",
+            message="All loaded documents and their chunks have been cleared."
+        )
+    except Exception as e:
+        logger.error(f"Error clearing all documents: {e}")
+        raise HTTPException(status_code=500, detail=f"Error clearing documents: {str(e)}")
+
+@router.get("/documents", response_model=DocumentsListResponse)
+def get_documents_list():
+    """List all currently loaded documents"""
+    return DocumentsListResponse(
+        documents=list(rag_service.loaded_documents.values())
+    )
+
 @router.get("/status", response_model=StatusResponse)
 def get_status() -> StatusResponse:
-    """Get current system status"""
     try:
         status = rag_service.get_status()
         return StatusResponse(
@@ -160,10 +192,8 @@ def get_status() -> StatusResponse:
 
 @router.get("/", response_class=HTMLResponse)
 async def serve_interface() -> HTMLResponse:
-    """Serve the web interface"""
     try:
-        # Fixed: consistent path with static mount
-        with open("static/index.html", "r", encoding="utf-8") as f:
+        with open("templates/index.html", "r", encoding="utf-8") as f:
             return HTMLResponse(content=f.read())
     except FileNotFoundError:
         return HTMLResponse(content="""

@@ -11,8 +11,8 @@ LOG_FILE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'rag_sy
 
 # Database and models
 VECTOR_DB_PATH = "./vector_db"
-EMBEDDING_MODEL = "all-MiniLM-L6-v2"
-LLM_MODEL = "llama3.1:8b"
+EMBEDDING_MODEL_NAME = "all-MiniLM-L6-v2"
+LLM_MODEL_NAME = "llama3.1:8b"
 LLM_BASE_URL = "http://localhost:11434"
 
 # titles

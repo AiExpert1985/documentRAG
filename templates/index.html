@@ -10,7 +10,7 @@
 
 <body>
     <div class="header">
-        <h1>📚 Document RAG System</h1>
+        <h1>Document RAG System</h1>
         <div class="header-status">
             <div id="documentIndicator" class="document-indicator empty">📋 No document loaded</div>
             <div id="connectionStatus" class="status-indicator">Connecting...</div>
@@ -18,24 +18,31 @@
     </div>
 
     <div class="section upload-section">
-        <h3>📤 Upload PDF Document</h3>
+        <div class="section-header">
+            <h3>Upload PDF Document</h3>
+            <button class="secondary-btn" onclick="clearAllDocuments()">Clear All Documents</button>
+        </div>
         <div class="upload-area">
             <input type="file" id="pdfFile" accept=".pdf">
             <button onclick="uploadPDF()" class="primary-btn">Upload & Process PDF</button>
         </div>
         <div id="uploadStatus"></div>
+        <div class="documents-list-container">
+            <h4>Loaded Documents</h4>
+            <ul id="documentsList" class="documents-list"></ul>
+        </div>
     </div>
 
     <div class="section chat-section">
         <div class="chat-header">
-            <h3>💬 Document Chat</h3>
+            <h3>Document Chat</h3>
             <button onclick="clearChat()" class="secondary-btn">Clear Chat</button>
         </div>
 
         <div id="chatHistory" class="chat-history">
             <div class="message system-message">
                 <div class="system-content">
-                    Welcome! 👋 Upload a PDF document to start asking questions about it.
+                    Welcome! Upload a PDF document to start asking questions about it.
                 </div>
             </div>
         </div>
@@ -46,53 +53,20 @@
         </div>
 
         <div class="chat-help">
-            <small>💡 Example questions: "What is the main topic?", "Can you summarize this document?", "What are the
+            <small>Example questions: "What is the main topic?", "Can you summarize this document?", "What are the
                 key findings?"</small>
         </div>
     </div>
 
     <div class="section status-section">
         <div class="status-header">
-            <h3>📊 System Status</h3>
+            <h3>System Status</h3>
             <button onclick="getStatus()" class="secondary-btn">Refresh</button>
         </div>
         <div id="statusInfo"></div>
     </div>
 
     <script src="/static/app.js"></script>
-
-    <script>
-        // Enable/disable chat input based on document status
-        function updateChatInputState() {
-            fetch('/status')
-                .then(response => response.json())
-                .then(status => {
-                    const chatInput = document.getElementById('chatInput');
-                    const sendBtn = document.querySelector('.send-btn');
-
-                    if (status.ready_for_queries) {
-                        chatInput.disabled = false;
-                        chatInput.placeholder = "Ask a question about your document...";
-                        sendBtn.disabled = false;
-                    } else {
-                        chatInput.disabled = true;
-                        chatInput.placeholder = "Upload a PDF document first...";
-                        sendBtn.disabled = true;
-                    }
-                })
-                .catch(() => {
-                    // Keep disabled on error
-                    document.getElementById('chatInput').disabled = true;
-                    document.querySelector('.send-btn').disabled = true;
-                });
-        }
-
-        // Update chat input state periodically
-        setInterval(updateChatInputState, 5000);
-
-        // Initial update
-        setTimeout(updateChatInputState, 1000);
-    </script>
 </body>
 
 </html>

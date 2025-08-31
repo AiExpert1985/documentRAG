@@ -1,13 +1,14 @@
+// app.js
 const API_BASE = window.location.origin;
 let isTyping = false;
+let loadedDocuments = {};
 
-// Initialize the application
 window.onload = function () {
     checkConnection();
     getStatus();
+    listDocuments();
 }
 
-// Check server connection
 async function checkConnection() {
     try {
         const response = await fetch(`${API_BASE}/status`);
@@ -32,7 +33,6 @@ function updateConnectionStatus(connected) {
     }
 }
 
-// Upload and process PDF
 async function uploadPDF() {
     const fileInput = document.getElementById('pdfFile');
     const file = fileInput.files[0];
@@ -70,11 +70,10 @@ async function uploadPDF() {
             );
 
             getStatus();
+            listDocuments();
 
-            // Clear file input
             fileInput.value = '';
 
-            // Focus on chat input
             document.getElementById('chatInput').focus();
 
         } else {
@@ -101,7 +100,6 @@ async function uploadPDF() {
     }
 }
 
-// Unified chat function
 async function askQuestion() {
     if (isTyping) return;
 
@@ -112,16 +110,13 @@ async function askQuestion() {
         return;
     }
 
-    // Add user message to chat
     addToChat('You', question, 'user-message');
     document.getElementById('chatInput').value = '';
 
-    // Set typing state
     isTyping = true;
     const typingIndicator = addToChat('AI', '💭 Thinking...', 'ai-message typing');
 
     try {
-        // Single endpoint call
         const response = await fetch(`${API_BASE}/chat`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -130,14 +125,12 @@ async function askQuestion() {
 
         const result = await response.json();
 
-        // Remove typing indicator
-        typingIndicator.remove();
+        if (typingIndicator) typingIndicator.remove();
 
-        // Handle different response types
         if (result.status === 'success') {
             let message = result.answer;
             if (result.document && result.chunks_used) {
-                message += `\n\n📄 Source: ${result.document} (${result.chunks_used} sections analyzed)`;
+                message += `\n\n📄 Sources: ${result.document}`;
             }
             addToChat('AI', message, 'ai-message success');
 
@@ -147,7 +140,6 @@ async function askQuestion() {
                 'ai-message no-document'
             );
 
-            // Highlight upload section
             highlightUploadSection();
 
         } else {
@@ -158,7 +150,6 @@ async function askQuestion() {
         }
 
     } catch (error) {
-        // Remove typing indicator
         if (typingIndicator) typingIndicator.remove();
 
         addToChat('System',
@@ -168,26 +159,23 @@ async function askQuestion() {
 
     } finally {
         isTyping = false;
-        // Focus back on input
         document.getElementById('chatInput').focus();
     }
 }
 
-// Get system status
 async function getStatus() {
     try {
         const response = await fetch(`${API_BASE}/status`);
         const result = await response.json();
 
         let statusHtml = '<div class="response">';
-        statusHtml += `Document Loaded: ${result.document_loaded || 'None'}\n`;
+        statusHtml += `Document(s) Loaded: ${result.document_loaded || 'None'}\n`;
         statusHtml += `Chunks Available: ${result.chunks_available}\n`;
         statusHtml += `Ready for Queries: ${result.ready_for_queries ? 'Yes' : 'No'}`;
         statusHtml += '</div>';
 
         document.getElementById('statusInfo').innerHTML = statusHtml;
 
-        // Update document indicator
         updateDocumentIndicator(result);
 
         updateConnectionStatus(true);
@@ -199,12 +187,92 @@ async function getStatus() {
     }
 }
 
-// Update document status indicator
+async function listDocuments() {
+    try {
+        const response = await fetch(`${API_BASE}/documents`);
+        const result = await response.json();
+        const documentsList = document.getElementById('documentsList');
+        documentsList.innerHTML = '';
+
+        loadedDocuments = {}; // Clear existing list
+
+        if (result.documents && result.documents.length > 0) {
+            result.documents.forEach(doc => {
+                const li = document.createElement('li');
+                li.innerHTML = `
+                    <span>${doc.filename}</span>
+                    <button class="delete-btn" onclick="deleteDocument('${doc.id}')">Delete</button>
+                `;
+                documentsList.appendChild(li);
+                loadedDocuments[doc.id] = doc.filename; // Store for easy lookup
+            });
+        } else {
+            documentsList.innerHTML = '<li class="no-docs">No documents loaded.</li>';
+        }
+    } catch (error) {
+        document.getElementById('documentsList').innerHTML = `<li class="error-docs">Error loading documents list.</li>`;
+    }
+}
+
+async function deleteDocument(documentId) {
+    if (!confirm("Are you sure you want to delete this document?")) {
+        return;
+    }
+
+    addToChat('System', `Deleting document: ${loadedDocuments[documentId]}...`, 'system-message info');
+
+    try {
+        const response = await fetch(`${API_BASE}/documents/${documentId}`, {
+            method: 'DELETE'
+        });
+        const result = await response.json();
+
+        if (response.ok) {
+            addToChat('System', `✅ Document "${loadedDocuments[documentId]}" deleted successfully.`, 'system-message success');
+        } else {
+            addToChat('System', `❌ Failed to delete document: ${result.message}`, 'system-message error');
+        }
+
+        getStatus();
+        listDocuments();
+    } catch (error) {
+        addToChat('System', `❌ Connection error while deleting document.`, 'system-message error');
+    }
+}
+
+async function clearAllDocuments() {
+    if (!confirm("Are you sure you want to clear all loaded documents? This action is irreversible.")) {
+        return;
+    }
+
+    addToChat('System', `Clearing all documents...`, 'system-message info');
+
+    try {
+        const response = await fetch(`${API_BASE}/documents`, {
+            method: 'DELETE'
+        });
+        const result = await response.json();
+
+        if (response.ok) {
+            addToChat('System', `✅ All documents cleared successfully.`, 'system-message success');
+        } else {
+            addToChat('System', `❌ Failed to clear all documents: ${result.message}`, 'system-message error');
+        }
+
+        getStatus();
+        listDocuments();
+    } catch (error) {
+        addToChat('System', `❌ Connection error while clearing documents.`, 'system-message error');
+    }
+}
+
 function updateDocumentIndicator(status) {
     const indicator = document.getElementById('documentIndicator');
+    const docCount = status.document_loaded ? status.document_loaded.split(',').length : 0;
+    const plural = docCount > 1 ? 's' : '';
 
     if (status.ready_for_queries) {
-        indicator.textContent = `📄 ${status.document_loaded} (${status.chunks_available} chunks)`;
+        indicator.textContent = `📄 ${docCount} Document${plural} Loaded (${status.chunks_available} chunks)`;
         indicator.className = 'document-indicator loaded';
     } else {
         indicator.textContent = '📋 No document loaded';
@@ -212,7 +280,6 @@ function updateDocumentIndicator(status) {
     }
 }
 
-// Highlight upload section
 function highlightUploadSection() {
     const uploadSection = document.querySelector('.upload-section');
     uploadSection.classList.add('highlight');
@@ -222,7 +289,6 @@ function highlightUploadSection() {
     }, 3000);
 }
 
-// Add message to chat history
 function addToChat(sender, message, cssClass) {
     const chatHistory = document.getElementById('chatHistory');
     const messageDiv = document.createElement('div');
@@ -244,10 +310,9 @@ function addToChat(sender, message, cssClass) {
     chatHistory.appendChild(messageDiv);
     chatHistory.scrollTop = chatHistory.scrollHeight;
 
-    return messageDiv; // Return element for potential removal
+    return messageDiv;
 }
 
-// Event listeners
 document.getElementById('chatInput').addEventListener('keypress', function (e) {
     if (e.key === 'Enter' && !e.shiftKey) {
         e.preventDefault();
@@ -255,14 +320,12 @@ document.getElementById('chatInput').addEventListener('keypress', function (e) {
     }
 });
 
-// Auto-refresh status every 30 seconds
 setInterval(() => {
     if (!isTyping) {
         checkConnection();
     }
 }, 30000);
 
-// Clear chat history
 function clearChat() {
     const chatHistory = document.getElementById('chatHistory');
     chatHistory.innerHTML = '';

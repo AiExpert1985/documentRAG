@@ -3,12 +3,14 @@
 import requests
 from typing import Dict, Any, Union
 
+from services.config import LLM_MODEL_NAME, LLM_BASE_URL
+
 class LLMService:
-   def __init__(self, base_url: str = "http://localhost:11434", model: str = "llama3.1:8b") -> None:
+   def __init__(self, base_url = LLM_BASE_URL, model = LLM_MODEL_NAME) -> None:
        self.base_url: str = base_url
        self.model: str = model
    
-   def chat(self, prompt: str) -> Dict[str, Union[str, Any]]:
+   def chat(self, prompt: str) -> Dict[str, Any]:
        try:
            response: requests.Response = requests.post(f'{self.base_url}/api/generate',
                                   json={

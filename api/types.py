@@ -1,14 +1,10 @@
 # api/types.py
-"""Pydantic schemas for API request/response models"""
-
 from pydantic import BaseModel
-from typing import Optional
+from typing import Optional, List
 
-# Request Schemas
 class ChatRequest(BaseModel):
     question: str
 
-# Response Schemas
 class ChatResponse(BaseModel):
     status: str
     answer: Optional[str] = None
@@ -23,10 +19,18 @@ class UploadResponse(BaseModel):
     chunks: Optional[int] = None
     message: Optional[str] = None
     error: Optional[str] = None
-    search_method: Optional[str] = None
+    retrieval_method: Optional[str] = None
 
 class StatusResponse(BaseModel):
     current_method: str = "unknown"
     document_loaded: Optional[str] = None
     chunks_available: int = 0
     ready_for_queries: bool = False
+
+class DocumentsListResponse(BaseModel):
+    documents: List[str]
+
+class DeleteResponse(BaseModel):
+    status: str
+    message: Optional[str] = None
+    error: Optional[str] = None

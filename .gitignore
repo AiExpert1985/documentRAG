@@ -1,3 +1,4 @@
+# .gitignore
 # Python
 __pycache__/
 *.py[cod]
@@ -44,8 +45,8 @@ Thumbs.db
 
 # Project specific
 *.pdf
-*.log
-logs/
+# *.log # Removed to allow a sample log file
+# logs/ # Removed to allow a sample logs directory
 temp/
 uploads/
 .env
@@ -57,6 +58,9 @@ models/
 *.gguf
 
 # Database files
+# *.db # Removed to allow a sample db file
+# *.sqlite # Removed to allow a sample db file
+.gitignore
 *.db
 *.sqlite
 

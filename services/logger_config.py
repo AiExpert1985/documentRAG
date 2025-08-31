@@ -1,17 +1,14 @@
 import logging
 import os
 from logging.handlers import RotatingFileHandler
-
-# Changed LOG_FILE_NAME to match the logger instance name in other files
-LOGGER_NAME = "rag_system_logger"
-LOG_FILE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'rag_system.log')
+from services.config import LOGGER_NAME, LOG_FILE_PATH  # Import from config
 
 def setup_logging():
     """
     Sets up a professional logging configuration for the RAG system.
     Logs are written to a file and also printed to the console.
     """
-    # Create a logger instance
+    # Create a logger instance using imported constant
     logger = logging.getLogger(LOGGER_NAME)
     logger.setLevel(logging.DEBUG)  # Set the minimum level to log
 

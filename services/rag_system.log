@@ -1,0 +1,6 @@
+2025-08-31 16:01:55,737 - rag_system_logger - INFO - Logging configured successfully.
+2025-08-31 17:16:24,657 - rag_system_logger - INFO - Logging configured successfully.
+2025-08-31 17:21:01,676 - rag_system_logger - INFO - Logging configured successfully.
+2025-08-31 17:21:20,379 - rag_system_logger - INFO - Processing 24 chunks using semantic retrieval
+2025-08-31 17:23:01,505 - rag_system_logger - ERROR - Failed to add document to vector store: The read operation timed out in add.
+2025-08-31 17:23:01,506 - rag_system_logger - ERROR - Failed to setup document store
