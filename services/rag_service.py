@@ -9,18 +9,19 @@ from pathlib import Path
 
 from services.search_strategies import SearchMethod, SearchStrategy, KeywordSearch, SemanticSearch, HybridSearch
 
-logger = logging.getLogger(__name__)
+# Use the logger configured by logger_config.py
+logger = logging.getLogger("rag_system_logger")
 
 class RAGService:
     """Main service for RAG document processing and search"""
     
-    def __init__(self, search_method: SearchMethod = SearchMethod.SEMANTIC) -> None:
+    def __init__(self, search_method: SearchMethod = SearchMethod.HYBRID) -> None:
         self.current_document: Optional[str] = None
         
         # Strategy objects - created only when needed (lazy loading)
         self._search_strategies: Dict[SearchMethod, SearchStrategy] = {}
         
-        # Set search method (defaults to semantic)
+        # Set search method (defaults to hybrid)
         self.search_method = search_method
         self._current_search_strategy = self._get_strategy(search_method)
     
@@ -78,14 +79,17 @@ class RAGService:
             
             # Setup document store (no longer storing chunks in memory)
             logger.info(f"Processing {len(chunks)} chunks using {self.search_method.value} search")
-            setup_success = self._current_search_strategy.setup_document_store(chunks)
+            
+            # Pass document name to the setup method for persistence
+            document_name = Path(file_path).name
+            setup_success = self._current_search_strategy.setup_document_store(chunks, document_name)
             
             if not setup_success:
                 logger.error("Failed to setup document store")
                 return {"error": "Failed to setup document storage", "status": "error"}
             
             # Only store document metadata, not the chunks themselves
-            self.current_document = Path(file_path).name
+            self.current_document = document_name
             
             return {
                 "status": "success",

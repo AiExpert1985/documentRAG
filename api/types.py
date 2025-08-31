@@ -4,14 +4,9 @@
 from pydantic import BaseModel
 from typing import Optional
 
-# Request Schemas
 class ChatRequest(BaseModel):
     question: str
 
-class SearchMethodRequest(BaseModel):
-    search_method: str  # "semantic", "hybrid", etc.
-
-# Response Schemas  
 class ChatResponse(BaseModel):
     status: str
     answer: Optional[str] = None
@@ -33,8 +28,3 @@ class StatusResponse(BaseModel):
     document_loaded: Optional[str] = None
     chunks_available: int = 0
     ready_for_queries: bool = False
-
-class ClearDocumentsResponse(BaseModel):
-    status: str
-    message: Optional[str] = None
-    error: Optional[str] = None

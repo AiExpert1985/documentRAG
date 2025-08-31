@@ -13,13 +13,10 @@ from api.types import (
     ChatResponse, 
     UploadResponse, 
     StatusResponse,
-    SearchMethodRequest,
-    ClearDocumentsResponse
 )
 
-# Setup logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+# Use the logger configured by logger_config.py
+logger = logging.getLogger("rag_system_logger")
 
 router = APIRouter()
 rag_service = RAGService()
@@ -51,12 +48,9 @@ def chat_endpoint(request: ChatRequest) -> ChatResponse:
         
         # Create prompt with context
         prompt = f"""Based on the following context from the document "{rag_service.current_document}", answer the question accurately and concisely.
-
                 Context:
                 {context}
-
                 Question: {request.question}
-
                 Answer:"""
         
         # Get LLM response
@@ -139,52 +133,6 @@ async def upload_pdf(file: UploadFile = File(...)) -> UploadResponse:
             except Exception as e:
                 logger.error(f"Failed to cleanup temp file: {e}")
 
-@router.post("/set-search-method")
-def set_search_method(request: SearchMethodRequest) -> dict:
-    """Change the active search strategy"""
-    try:
-        # Validate search method
-        try:
-            search_method = SearchMethod(request.search_method)
-        except ValueError:
-            available_methods = [method.value for method in SearchMethod]
-            return {
-                "status": "error",
-                "error": f"Invalid search method. Available methods: {available_methods}"
-            }
-        
-        # Set search method
-        rag_service.set_search_method(search_method)
-        
-        return {
-            "status": "success",
-            "message": f"Search method changed to: {search_method.value}",
-            "current_method": search_method.value
-        }
-        
-    except Exception as e:
-        logger.error(f"Error setting search method: {e}")
-        return {
-            "status": "error",
-            "error": str(e)
-        }
-
-@router.delete("/clear-documents", response_model=ClearDocumentsResponse)
-def clear_documents() -> ClearDocumentsResponse:
-    """Clear all loaded documents"""
-    try:
-        result = rag_service.clear_documents()
-        return ClearDocumentsResponse(
-            status=result["status"],
-            message=result.get("message"),
-            error=result.get("error")
-        )
-    except Exception as e:
-        logger.error(f"Error clearing documents: {e}")
-        return ClearDocumentsResponse(
-            status="error",
-            error=str(e)
-        )
 
 @router.get("/status", response_model=StatusResponse)
 def get_status() -> StatusResponse:
@@ -210,7 +158,7 @@ def get_status() -> StatusResponse:
 async def serve_interface() -> HTMLResponse:
     """Serve the web interface"""
     try:
-        with open("templates/index.html", "r", encoding="utf-8") as f:
+        with open("static/index.html", "r", encoding="utf-8") as f:
             return HTMLResponse(content=f.read())
     except FileNotFoundError:
         return HTMLResponse(content="""

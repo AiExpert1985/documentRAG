@@ -9,9 +9,10 @@ from enum import Enum
 # Required dependencies
 from sentence_transformers import SentenceTransformer
 import chromadb
+from rank_bm25 import BM25Okapi # For Hybrid Search
 
-# Setup logging
-logger = logging.getLogger(__name__)
+# Use the logger configured by logger_config.py
+logger = logging.getLogger("rag_system_logger")
 
 class SearchMethod(Enum):
     KEYWORD = "keyword"
@@ -22,7 +23,7 @@ class SearchStrategy(ABC):
     """Abstract base class for different search strategies"""
     
     @abstractmethod
-    def setup_document_store(self, chunks: List[Any]) -> bool:
+    def setup_document_store(self, chunks: List[Any], document_name: str) -> bool:
         """Setup storage for document chunks"""
         pass
     
@@ -46,46 +47,34 @@ class KeywordSearch(SearchStrategy):
     
     def __init__(self):
         self.chunks: List[Any] = []
+        self.bm25 = None
         logger.info("Keyword search initialized")
     
-    def setup_document_store(self, chunks: List[Any]) -> bool:
-        """Store chunks in memory for keyword search"""
+    def setup_document_store(self, chunks: List[Any], document_name: str) -> bool:
+        """Store chunks in memory and build BM25 index"""
         try:
             self.chunks = chunks
-            logger.info(f"Stored {len(chunks)} chunks for keyword search")
+            tokenized_corpus = [chunk.page_content.lower().split() for chunk in chunks]
+            self.bm25 = BM25Okapi(tokenized_corpus)
+            logger.info(f"Stored {len(chunks)} chunks and built BM25 index for keyword search")
             return True
         except Exception as e:
             logger.error(f"Failed to setup keyword search: {e}")
             return False
     
     def search(self, question: str, top_k: int = 3) -> List[str]:
-        """Search for keyword matches in chunks"""
-        if not self.chunks:
-            logger.error("No chunks available for keyword search")
-            raise RuntimeError("No chunks loaded for keyword search")
+        """Search for keyword matches using BM25"""
+        if not self.bm25:
+            logger.error("BM25 index not initialized")
+            raise RuntimeError("BM25 index not initialized. Call setup_document_store first.")
         
         try:
-            relevant_chunks: List[str] = []
-            question_lower: str = question.lower()
+            tokenized_query = question.lower().split()
+            scores = self.bm25.get_scores(tokenized_query)
             
-            # Score chunks by keyword matches
-            scored_chunks: List[tuple] = []
-            
-            for chunk in self.chunks:
-                content_lower = chunk.page_content.lower()
-                score = sum(1 for word in question_lower.split() 
-                           if word in content_lower)
-                
-                if score > 0:
-                    scored_chunks.append((chunk.page_content, score))
-            
-            # Sort by score and take top_k
-            scored_chunks.sort(key=lambda x: x[1], reverse=True)
-            relevant_chunks = [content for content, _ in scored_chunks[:top_k]]
-            
-            # Fallback: return first chunk if no matches
-            if not relevant_chunks and self.chunks:
-                relevant_chunks = [self.chunks[0].page_content]
+            # Get top_k documents
+            top_k_indices = sorted(range(len(scores)), key=lambda k: scores[k], reverse=True)[:top_k]
+            relevant_chunks = [self.chunks[i].page_content for i in top_k_indices if scores[i] > 0]
             
             logger.debug(f"Keyword search found {len(relevant_chunks)} relevant chunks")
             return relevant_chunks
@@ -95,9 +84,10 @@ class KeywordSearch(SearchStrategy):
             raise
     
     def clear_documents(self) -> bool:
-        """Clear all stored chunks"""
+        """Clear all stored chunks and BM25 index"""
         try:
             self.chunks = []
+            self.bm25 = None
             logger.info("Cleared all chunks from keyword search")
             return True
         except Exception as e:
@@ -107,6 +97,8 @@ class KeywordSearch(SearchStrategy):
     def get_chunks_count(self) -> int:
         """Get number of stored chunks"""
         return len(self.chunks)
+    
+class SemanticSearch(SearchStrategy):
     """Semantic similarity-based search using embeddings"""
     
     def __init__(self):
@@ -119,15 +111,17 @@ class KeywordSearch(SearchStrategy):
             logger.error(f"Failed to initialize semantic search: {e}")
             raise
     
-    def setup_document_store(self, chunks: List[Any]) -> bool:
+    def setup_document_store(self, chunks: List[Any], document_name: str) -> bool:
         """Setup vector database with chunk embeddings"""
         try:
-            collection_name = "rag_chunks"
+            # Use a unique collection name for the document to allow for persistence
+            collection_name = f"doc_{document_name.replace('.', '_').replace(' ', '_').lower()}"
             
-            # Clear existing collection for single document mode
+            # Delete and re-create to ensure a clean state for a new document upload
+            # TODO: Implement a multi-document strategy to append instead of replacing.
             try:
                 self.client.delete_collection(collection_name)
-                logger.info(f"Cleared existing collection: {collection_name}")
+                logger.info(f"Cleared existing collection for a new upload: {collection_name}")
             except Exception:
                 pass  # Collection might not exist
             
@@ -189,7 +183,7 @@ class KeywordSearch(SearchStrategy):
         """Clear all stored documents"""
         try:
             if self.collection:
-                self.client.delete_collection("rag_chunks")
+                self.client.delete_collection(self.collection.name)
                 self.collection = None
                 logger.info("Cleared all documents from vector store")
                 return True
@@ -216,11 +210,11 @@ class HybridSearch(SearchStrategy):
         self.semantic_search = SemanticSearch()
         logger.info("Hybrid search initialized with keyword and semantic strategies")
     
-    def setup_document_store(self, chunks: List[Any]) -> bool:
+    def setup_document_store(self, chunks: List[Any], document_name: str) -> bool:
         """Setup both keyword and semantic stores"""
         try:
-            keyword_success = self.keyword_search.setup_document_store(chunks)
-            semantic_success = self.semantic_search.setup_document_store(chunks)
+            keyword_success = self.keyword_search.setup_document_store(chunks, document_name)
+            semantic_success = self.semantic_search.setup_document_store(chunks, document_name)
             
             if keyword_success and semantic_success:
                 logger.info("Successfully setup hybrid search storage")
@@ -234,7 +228,7 @@ class HybridSearch(SearchStrategy):
             return False
     
     def search(self, question: str, top_k: int = 3) -> List[str]:
-        """Combine keyword and semantic search results"""
+        """Combine keyword and semantic search results using a simple rank fusion"""
         try:
             # Get results from both strategies
             keyword_results = self.keyword_search.search(question, top_k)
@@ -246,25 +240,26 @@ class HybridSearch(SearchStrategy):
             
             # Add semantic results first (usually higher quality)
             for chunk in semantic_results:
-                chunk_hash = hash(chunk[:100])  # Use first 100 chars as identifier
-                if chunk_hash not in seen_chunks:
+                if chunk not in seen_chunks:
                     combined_results.append(chunk)
-                    seen_chunks.add(chunk_hash)
+                    seen_chunks.add(chunk)
             
             # Add keyword results that aren't already included
             for chunk in keyword_results:
-                chunk_hash = hash(chunk[:100])
-                if chunk_hash not in seen_chunks and len(combined_results) < top_k:
+                if chunk not in seen_chunks:
                     combined_results.append(chunk)
-                    seen_chunks.add(chunk_hash)
             
             logger.debug(f"Hybrid search combined {len(semantic_results)} semantic + {len(keyword_results)} keyword results into {len(combined_results)} final results")
             return combined_results[:top_k]
             
         except Exception as e:
-            logger.error(f"Hybrid search failed: {e}")
+            logger.error(f"Hybrid search failed: {e}. Attempting fallback to semantic search.")
             # Fallback to semantic search only
-            return self.semantic_search.search(question, top_k)
+            try:
+                return self.semantic_search.search(question, top_k)
+            except Exception as e_fallback:
+                logger.error(f"Semantic search fallback also failed: {e_fallback}")
+                return []
     
     def clear_documents(self) -> bool:
         """Clear documents from both strategies"""
@@ -286,5 +281,3 @@ class HybridSearch(SearchStrategy):
     def get_chunks_count(self) -> int:
         """Get chunks count from semantic search (primary store)"""
         return self.semantic_search.get_chunks_count()
-
-# Future search strategies can be added here following the same pattern
