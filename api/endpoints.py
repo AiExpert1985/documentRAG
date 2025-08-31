@@ -38,7 +38,6 @@ def chat_endpoint(request: ChatRequest) -> ChatResponse:
         )
     
     try:
-        # Save user message to database
         rag_service.save_chat_message(sender="user", content=request.question)
         
         relevant_chunks = rag_service.retrieval_chunks(request.question)
@@ -56,7 +55,6 @@ def chat_endpoint(request: ChatRequest) -> ChatResponse:
         
         final_sources_str = ", ".join(sources)
 
-        # Get existing chat history from database
         chat_history = rag_service.get_chat_history()
         history_prompt = "\n".join([f"{msg['sender']}: {msg['content']}" for msg in chat_history])
         
@@ -75,7 +73,6 @@ def chat_endpoint(request: ChatRequest) -> ChatResponse:
         result = llm_service.chat(prompt)
         
         if result["status"] == "success":
-            # Save AI response to database
             rag_service.save_chat_message(sender="ai", content=result["answer"])
             
             return ChatResponse(
@@ -114,12 +111,15 @@ async def upload_pdf(file: UploadFile = File(...)) -> UploadResponse:
     
     temp_path = None
     try:
+        # Use a secure, temporary file path for the file content.
+        # This is where the file is actually stored on disk.
         with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as temp_file:
             content: bytes = await file.read()
             temp_file.write(content)
             temp_path = temp_file.name
         
-        result = rag_service.process_pdf_file(temp_path)
+        # Pass the temporary file path and the original filename to the service
+        result = rag_service.process_pdf_file(temp_path, file.filename)
         
         if result["status"] == "success":
             return UploadResponse(
@@ -143,6 +143,7 @@ async def upload_pdf(file: UploadFile = File(...)) -> UploadResponse:
             error=f"Upload failed: {str(e)}"
         )
     finally:
+        # Cleanup the temporary file from the disk
         if temp_path and os.path.exists(temp_path):
             try:
                 os.unlink(temp_path)

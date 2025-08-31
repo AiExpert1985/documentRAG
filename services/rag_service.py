@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 
 from services.retrieval_strategies import RetrievalMethod, RetrievalStrategy, KeywordRetrieval, SemanticRetrieval, HybridRetrieval
 from services.config import LOGGER_NAME
-from database.chat_db import get_db, Message
+from database.chat_db import get_db, SessionLocal, Message
 
 logger = logging.getLogger(LOGGER_NAME)
 
@@ -53,9 +53,9 @@ class RAGService:
     def get_chunks_count(self) -> int:
         return self._current_strategy.get_chunks_count()
     
-    def process_pdf_file(self, file_path: str) -> Dict[str, Union[str, int]]:
+    def process_pdf_file(self, file_path: str, original_filename: str) -> Dict[str, Union[str, int]]:
         document_id = str(uuid.uuid4())
-        document_name = Path(file_path).name
+        document_name = original_filename
         
         try:
             loader = PyPDFLoader(file_path)
