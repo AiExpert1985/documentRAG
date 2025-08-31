@@ -1,8 +1,4 @@
 # services/config.py
-"""
-Central configuration for the RAG system.
-Stores global constants and settings in one place.
-"""
 import os
 
 # Logger configuration
@@ -15,5 +11,9 @@ EMBEDDING_MODEL_NAME = "all-MiniLM-L6-v2"
 LLM_MODEL_NAME = "llama3.1:8b"
 LLM_BASE_URL = "http://localhost:11434"
 
-# titles
+# Basic limits
+MAX_FILE_SIZE = 50 * 1024 * 1024  # 50MB
+REQUEST_TIMEOUT = 30  # seconds
+
+# App metadata
 APP_TITLE = 'Document RAG System'

@@ -1,6 +1,6 @@
 # api/types.py
 from pydantic import BaseModel
-from typing import Optional, List, Dict
+from typing import Optional, List
 
 class Message(BaseModel):
     sender: str
@@ -41,4 +41,3 @@ class DocumentsListResponse(BaseModel):
 class DeleteResponse(BaseModel):
     status: str
     message: Optional[str] = None
-    error: Optional[str] = None

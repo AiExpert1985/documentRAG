@@ -1,37 +1,35 @@
 # services/rag_service.py
-"""Memory-optimized RAG service for document processing"""
-
 import logging
-from typing import List, Optional, Dict, Union
+from typing import List, Optional, Dict, Union, Any
 from langchain_community.document_loaders import PyPDFLoader
 from langchain.text_splitter import RecursiveCharacterTextSplitter
-from pathlib import Path
 import uuid
-import asyncio
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
 
 from services.retrieval_strategies import RetrievalMethod, RetrievalStrategy, KeywordRetrieval, SemanticRetrieval, HybridRetrieval
 from services.config import LOGGER_NAME
-from database.chat_db import get_async_db, Message
+from database.chat_db import AsyncSessionLocal, Message
 
 logger = logging.getLogger(LOGGER_NAME)
 
 class RAGService:
     _instance = None
     
-    def __new__(cls, *args, **kwargs):
+    def __new__(cls):
         if cls._instance is None:
             cls._instance = super().__new__(cls)
+            cls._instance._initialized = False
         return cls._instance
     
     def __init__(self, retrieval_method: RetrievalMethod = RetrievalMethod.SEMANTIC):
-        if not hasattr(self, '_initialized'):
-            self._current_strategy: RetrievalStrategy = self._create_strategy(retrieval_method)
-            self.retrieval_method = retrieval_method
-            self.loaded_documents: Dict[str, str] = {}
-            self._initialized = True
-            logger.info("RAGService initialized")
+        if self._initialized:
+            return
+            
+        self._current_strategy: RetrievalStrategy = self._create_strategy(retrieval_method)
+        self.retrieval_method = retrieval_method
+        self.loaded_documents: Dict[str, str] = {}
+        self._initialized = True
+        logger.info("RAG service initialized")
             
     def _create_strategy(self, method: RetrievalMethod) -> RetrievalStrategy:
         if method == RetrievalMethod.SEMANTIC:
@@ -39,17 +37,7 @@ class RAGService:
         elif method == RetrievalMethod.KEYWORD:
             return KeywordRetrieval()
         elif method == RetrievalMethod.HYBRID:
-            return HybridRetrieval(
-                SemanticRetrieval()
-            )
-
-    def set_retrieval_method(self, method: RetrievalMethod):
-        if self.retrieval_method == method:
-            return
-        
-        self._current_strategy = self._create_strategy(method)
-        self.retrieval_method = method
-        logger.info(f"Switched retrieval method to {method.value}")
+            return HybridRetrieval()
     
     def has_documents(self) -> bool:
         return len(self.loaded_documents) > 0
@@ -57,9 +45,8 @@ class RAGService:
     def get_chunks_count(self) -> int:
         return self._current_strategy.get_chunks_count()
     
-    async def process_pdf_file(self, file_path: str, original_filename: str) -> Dict[str, Union[str, int]]:
+    async def process_pdf_file(self, file_path: str, original_filename: str) -> Dict[str, Any]:
         document_id = str(uuid.uuid4())
-        document_name = original_filename
         
         try:
             loader = PyPDFLoader(file_path)
@@ -68,30 +55,25 @@ class RAGService:
             if not documents:
                 return {"error": "No content extracted from PDF", "status": "error"}
             
-            text_splitter = RecursiveCharacterTextSplitter(
-                chunk_size=1000,
-                chunk_overlap=200
-            )
+            text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
             chunks = text_splitter.split_documents(documents)
             
             if not chunks:
-                return {"error": "Failed to create chunks from document", "status": "error"}
+                return {"error": "Failed to create chunks", "status": "error"}
             
-            logger.info(f"Processing {len(chunks)} chunks using {self.retrieval_method.value} retrieval")
-            setup_success = await self._current_strategy.add_document(document_id, document_name, chunks)
+            success = await self._current_strategy.add_document(document_id, original_filename, chunks)
             
-            if not setup_success:
-                logger.error("Failed to setup document store")
-                return {"error": "Failed to setup document storage", "status": "error"}
+            if not success:
+                return {"error": "Failed to store document", "status": "error"}
             
-            self.loaded_documents[document_id] = document_name
+            self.loaded_documents[document_id] = original_filename
             
             return {
                 "status": "success",
-                "filename": document_name,
+                "filename": original_filename,
                 "pages": len(documents),
                 "chunks": len(chunks),
-                "message": f"PDF processed into {len(chunks)} retrievalable chunks using {self.retrieval_method.value} retrieval",
+                "message": f"PDF processed into {len(chunks)} chunks",
                 "retrieval_method": self.retrieval_method.value
             }
             
@@ -101,14 +83,13 @@ class RAGService:
     
     async def retrieve_chunks(self, question: str, top_k: int = 3) -> List[Dict]:
         if not self.has_documents():
-            logger.warning("No documents available for retrieval")
             return []
         
         try:
             return await self._current_strategy.retrieve(question, top_k)
         except Exception as e:
-            logger.error(f"retrieve failed: {e}")
-            raise
+            logger.error(f"Retrieval failed: {e}")
+            return []
     
     def get_status(self) -> Dict[str, Union[str, int, bool]]:
         return {
@@ -118,36 +99,29 @@ class RAGService:
             "ready_for_queries": self.has_documents()
         }
         
-    async def save_chat_message(self, sender: str, content: str):
-        db_gen = get_async_db()
-        db = await anext(db_gen)
-        try:
-            new_message = Message(sender=sender, content=content)
-            db.add(new_message)
-            await db.commit()
-            await db.refresh(new_message)
-        except Exception as e:
-            logger.error(f"Failed to save chat message: {e}")
-            await db.rollback()
-        finally:
-            await db.close()
+    async def save_chat_message(self, sender: str, content: str) -> bool:
+        async with AsyncSessionLocal() as db:
+            try:
+                new_message = Message(sender=sender, content=content)
+                db.add(new_message)
+                await db.commit()
+                return True
+            except Exception as e:
+                logger.error(f"Failed to save chat message: {e}")
+                await db.rollback()
+                return False
             
     async def get_chat_history(self, limit: int = 50) -> List[Dict]:
-        db_gen = get_async_db()
-        db = await anext(db_gen)
-        try:
-            result = await db.execute(
-                select(Message)
-                .order_by(Message.timestamp.desc())
-                .limit(limit)
-            )
-            messages = result.scalars().all()
-            return [{"sender": msg.sender, "content": msg.content} for msg in reversed(messages)]
-        except Exception as e:
-            logger.error(f"Failed to retrieve chat history: {e}")
-            return []
-        finally:
-            await db.close()
+        async with AsyncSessionLocal() as db:
+            try:
+                result = await db.execute(
+                    select(Message).order_by(Message.timestamp.desc()).limit(limit)
+                )
+                messages = result.scalars().all()
+                return [{"sender": msg.sender, "content": msg.content} for msg in reversed(messages)]
+            except Exception as e:
+                logger.error(f"Failed to get chat history: {e}")
+                return []
             
     async def delete_document(self, document_id: str) -> bool:
         if document_id not in self.loaded_documents:

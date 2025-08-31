@@ -1,1 +1,9 @@
 2025-08-31 20:07:19,830 - rag_system_logger - INFO - Logging configured successfully.
+2025-08-31 21:20:46,198 - rag_system_logger - INFO - Logging configured successfully.
+2025-08-31 21:21:47,593 - rag_system_logger - INFO - Processing 24 chunks using semantic retrieval
+2025-08-31 21:21:49,857 - rag_system_logger - INFO - Stored 24 vectors in ChromaDB for 'my_conversation.pdf'
+2025-08-31 21:22:01,780 - rag_system_logger - INFO - Processing 24 chunks using semantic retrieval
+2025-08-31 21:22:02,727 - rag_system_logger - INFO - Stored 24 vectors in ChromaDB for 'my_conversation.pdf'
+2025-08-31 21:22:27,727 - rag_system_logger - ERROR - retrieve failed: 'RAGService' object has no attribute '_current_search_strategy'
+2025-08-31 21:22:27,728 - rag_system_logger - ERROR - Chat endpoint error: 'RAGService' object has no attribute '_current_search_strategy'
+2025-08-31 21:56:00,294 - rag_system_logger - INFO - Logging configured successfully.
