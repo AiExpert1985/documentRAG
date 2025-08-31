@@ -7,6 +7,7 @@ window.onload = function () {
     checkConnection();
     getStatus();
     listDocuments();
+    loadChatHistory();
 }
 
 async function checkConnection() {
@@ -194,7 +195,7 @@ async function listDocuments() {
         const documentsList = document.getElementById('documentsList');
         documentsList.innerHTML = '';
 
-        loadedDocuments = {}; // Clear existing list
+        loadedDocuments = {};
 
         if (result.documents && result.documents.length > 0) {
             result.documents.forEach(doc => {
@@ -204,7 +205,7 @@ async function listDocuments() {
                     <button class="delete-btn" onclick="deleteDocument('${doc.id}')">Delete</button>
                 `;
                 documentsList.appendChild(li);
-                loadedDocuments[doc.id] = doc.filename; // Store for easy lookup
+                loadedDocuments[doc.id] = doc.filename;
             });
         } else {
             documentsList.innerHTML = '<li class="no-docs">No documents loaded.</li>';
@@ -263,6 +264,24 @@ async function clearAllDocuments() {
         listDocuments();
     } catch (error) {
         addToChat('System', `❌ Connection error while clearing documents.`, 'system-message error');
+    }
+}
+
+async function loadChatHistory() {
+    try {
+        const response = await fetch(`${API_BASE}/chat-history`);
+        if (response.ok) {
+            const history = await response.json();
+            history.forEach(message => {
+                addToChat(
+                    message.sender === 'user' ? 'You' : 'AI',
+                    message.content,
+                    message.sender === 'user' ? 'user-message' : 'ai-message'
+                );
+            });
+        }
+    } catch (error) {
+        console.error("Failed to load chat history:", error);
     }
 }
 

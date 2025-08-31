@@ -2,16 +2,17 @@
 import logging
 import tempfile
 import os
+import hashlib
+from typing import List, Dict
+
 from fastapi import APIRouter, UploadFile, File, HTTPException
 from fastapi.responses import HTMLResponse, JSONResponse
-from sqlalchemy.orm import Session
-from typing import List
 
 from services.config import LOGGER_NAME
 from services.rag_service import RAGService
 from services.llm_service import LLMService
+from database.chat_db import get_file_hash, check_file_hash, save_file_hash
 from services.retrieval_strategies import RetrievalMethod
-from database.chat_db import Message
 
 from api.types import (
     ChatRequest, 
@@ -30,7 +31,7 @@ rag_service = RAGService()
 llm_service = LLMService()
 
 @router.post("/chat", response_model=ChatResponse)
-def chat_endpoint(request: ChatRequest) -> ChatResponse:
+async def chat_endpoint(request: ChatRequest) -> ChatResponse:
     if not rag_service.has_documents():
         return ChatResponse(
             status="no_document",
@@ -38,13 +39,13 @@ def chat_endpoint(request: ChatRequest) -> ChatResponse:
         )
     
     try:
-        rag_service.save_chat_message(sender="user", content=request.question)
+        await rag_service.save_chat_message(sender="user", content=request.question)
         
-        relevant_chunks = rag_service.retrieval_chunks(request.question)
+        relevant_chunks = await rag_service.retrieve_chunks(request.question)
         
         if not relevant_chunks:
             ai_response = "No relevant content found in the documents for your question."
-            rag_service.save_chat_message(sender="ai", content=ai_response)
+            await rag_service.save_chat_message(sender="ai", content=ai_response)
             return ChatResponse(status="error", error=ai_response)
             
         context = ""
@@ -55,7 +56,7 @@ def chat_endpoint(request: ChatRequest) -> ChatResponse:
         
         final_sources_str = ", ".join(sources)
 
-        chat_history = rag_service.get_chat_history()
+        chat_history = await rag_service.get_chat_history()
         history_prompt = "\n".join([f"{msg['sender']}: {msg['content']}" for msg in chat_history])
         
         prompt = f"""Based on the following context from the loaded documents and the chat history, answer the question accurately and concisely. Include specific page numbers and source filenames for your answer.
@@ -73,7 +74,7 @@ def chat_endpoint(request: ChatRequest) -> ChatResponse:
         result = llm_service.chat(prompt)
         
         if result["status"] == "success":
-            rag_service.save_chat_message(sender="ai", content=result["answer"])
+            await rag_service.save_chat_message(sender="ai", content=result["answer"])
             
             return ChatResponse(
                 status="success",
@@ -82,7 +83,7 @@ def chat_endpoint(request: ChatRequest) -> ChatResponse:
                 chunks_used=len(relevant_chunks)
             )
         else:
-            rag_service.save_chat_message(sender="ai", content="LLM error: " + result.get('error', 'Unknown error'))
+            await rag_service.save_chat_message(sender="ai", content="LLM error: " + result.get('error', 'Unknown error'))
             return ChatResponse(
                 status="error",
                 error=f"LLM error: {result.get('error', 'Unknown error')}"
@@ -103,6 +104,17 @@ async def upload_pdf(file: UploadFile = File(...)) -> UploadResponse:
             error="Only PDF files are supported"
         )
     
+    # Read file content and check for duplicates first
+    file_content = await file.read()
+    file_hash = get_file_hash(file_content)
+    await file.seek(0) # Reset file pointer for later processing
+    
+    if check_file_hash(file_hash):
+        return UploadResponse(
+            status="error",
+            error="This document has already been uploaded."
+        )
+
     if file.size and file.size > 50_000_000:
         return UploadResponse(
             status="error",
@@ -111,17 +123,14 @@ async def upload_pdf(file: UploadFile = File(...)) -> UploadResponse:
     
     temp_path = None
     try:
-        # Use a secure, temporary file path for the file content.
-        # This is where the file is actually stored on disk.
         with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as temp_file:
-            content: bytes = await file.read()
-            temp_file.write(content)
+            temp_file.write(file_content)
             temp_path = temp_file.name
         
-        # Pass the temporary file path and the original filename to the service
-        result = rag_service.process_pdf_file(temp_path, file.filename)
+        result = await rag_service.process_pdf_file(temp_path, file.filename)
         
         if result["status"] == "success":
+            save_file_hash(file_hash)
             return UploadResponse(
                 status="success",
                 filename=result["filename"],
@@ -143,7 +152,6 @@ async def upload_pdf(file: UploadFile = File(...)) -> UploadResponse:
             error=f"Upload failed: {str(e)}"
         )
     finally:
-        # Cleanup the temporary file from the disk
         if temp_path and os.path.exists(temp_path):
             try:
                 os.unlink(temp_path)
@@ -151,9 +159,9 @@ async def upload_pdf(file: UploadFile = File(...)) -> UploadResponse:
                 logger.error(f"Failed to cleanup temp file: {e}")
 
 @router.delete("/documents/{document_id}", response_model=DeleteResponse)
-def delete_document_endpoint(document_id: str):
+async def delete_document_endpoint(document_id: str):
     try:
-        success = rag_service.delete_document(document_id)
+        success = await rag_service.delete_document(document_id)
         if success:
             return DeleteResponse(
                 status="success",
@@ -169,9 +177,9 @@ def delete_document_endpoint(document_id: str):
         raise HTTPException(status_code=500, detail=f"Error deleting document: {str(e)}")
 
 @router.delete("/documents", response_model=DeleteResponse)
-def clear_all_documents_endpoint():
+async def clear_all_documents_endpoint():
     try:
-        rag_service.clear_all_documents()
+        await rag_service.clear_all_documents()
         return DeleteResponse(
             status="success",
             message="All loaded documents and their chunks have been cleared."
@@ -182,14 +190,15 @@ def clear_all_documents_endpoint():
 
 @router.get("/documents", response_model=DocumentsListResponse)
 def get_documents_list():
-    return DocumentsListResponse(
-        documents=list(rag_service.loaded_documents.values())
-    )
+    documents_list = []
+    for doc_id, filename in rag_service.loaded_documents.items():
+        documents_list.append({"id": doc_id, "filename": filename})
+    return DocumentsListResponse(documents=documents_list)
 
 @router.get("/chat-history", response_model=List[MessageType])
-def get_chat_history_endpoint():
+async def get_chat_history_endpoint():
     try:
-        return rag_service.get_chat_history()
+        return await rag_service.get_chat_history(limit=50)
     except Exception as e:
         logger.error(f"Chat history endpoint error: {e}")
         raise HTTPException(status_code=500, detail="Failed to retrieve chat history.")

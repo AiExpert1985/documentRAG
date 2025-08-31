@@ -5,6 +5,10 @@ from typing import Optional, List, Dict
 class Message(BaseModel):
     sender: str
     content: str
+    
+class DocumentsListItem(BaseModel):
+    id: str
+    filename: str
 
 class ChatRequest(BaseModel):
     question: str
@@ -32,7 +36,7 @@ class StatusResponse(BaseModel):
     ready_for_queries: bool = False
 
 class DocumentsListResponse(BaseModel):
-    documents: List[str]
+    documents: List[DocumentsListItem]
 
 class DeleteResponse(BaseModel):
     status: str

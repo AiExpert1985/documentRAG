@@ -1,0 +1,23 @@
+2025-08-31 16:01:55,737 - rag_system_logger - INFO - Logging configured successfully.
+2025-08-31 17:16:24,657 - rag_system_logger - INFO - Logging configured successfully.
+2025-08-31 17:21:01,676 - rag_system_logger - INFO - Logging configured successfully.
+2025-08-31 17:21:20,379 - rag_system_logger - INFO - Processing 24 chunks using semantic retrieval
+2025-08-31 17:23:01,505 - rag_system_logger - ERROR - Failed to add document to vector store: The read operation timed out in add.
+2025-08-31 17:23:01,506 - rag_system_logger - ERROR - Failed to setup document store
+2025-08-31 17:31:17,963 - rag_system_logger - INFO - Processing 24 chunks using semantic retrieval
+2025-08-31 17:40:21,100 - rag_system_logger - ERROR - Failed to add document to vector store: The read operation timed out in add.
+2025-08-31 17:40:21,101 - rag_system_logger - ERROR - Failed to setup document store
+2025-08-31 17:45:20,079 - rag_system_logger - INFO - Processing 24 chunks using semantic retrieval
+2025-08-31 18:13:23,332 - rag_system_logger - ERROR - Failed to add document to vector store: The read operation timed out in add.
+2025-08-31 18:13:23,332 - rag_system_logger - ERROR - Failed to setup document store
+2025-08-31 18:15:36,337 - rag_system_logger - INFO - Processing 24 chunks using semantic retrieval
+2025-08-31 18:48:17,143 - rag_system_logger - INFO - Stored 24 vectors in ChromaDB for 'tmpnced4aej.pdf'
+2025-08-31 18:57:02,885 - rag_system_logger - INFO - Logging configured successfully.
+2025-08-31 18:58:13,860 - rag_system_logger - INFO - Logging configured successfully.
+2025-08-31 18:58:24,366 - rag_system_logger - INFO - Processing 24 chunks using semantic retrieval
+2025-08-31 18:58:26,066 - rag_system_logger - INFO - Stored 24 vectors in ChromaDB for 'tmp98hbjxyn.pdf'
+2025-08-31 19:17:33,947 - rag_system_logger - INFO - Logging configured successfully.
+2025-08-31 19:17:47,387 - rag_system_logger - INFO - Processing 24 chunks using semantic retrieval
+2025-08-31 19:17:48,381 - rag_system_logger - INFO - Stored 24 vectors in ChromaDB for 'my_conversation.pdf'
+2025-08-31 19:33:53,250 - rag_system_logger - INFO - Processing 24 chunks using semantic retrieval
+2025-08-31 19:33:54,291 - rag_system_logger - INFO - Stored 24 vectors in ChromaDB for 'my_conversation.pdf'
