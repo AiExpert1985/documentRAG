@@ -1,20 +1,20 @@
 # main.py
-
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 from api.endpoints import router
-from services.logger_config import setup_logging # Import the setup function
+from services.logger_config import setup_logging
 from services.config import APP_TITLE
+from database.chat_db import Base, engine
 
-# Call the function to configure logging
+# Create database tables
+Base.metadata.create_all(bind=engine)
+
 setup_logging()
 
 app = FastAPI(title=APP_TITLE)
 
-# Mount static files
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
-# Include API routes
 app.include_router(router)
 
 if __name__ == "__main__":

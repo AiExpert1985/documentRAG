@@ -4,11 +4,14 @@ import tempfile
 import os
 from fastapi import APIRouter, UploadFile, File, HTTPException
 from fastapi.responses import HTMLResponse, JSONResponse
+from sqlalchemy.orm import Session
+from typing import List
 
 from services.config import LOGGER_NAME
 from services.rag_service import RAGService
 from services.llm_service import LLMService
 from services.retrieval_strategies import RetrievalMethod
+from database.chat_db import Message
 
 from api.types import (
     ChatRequest, 
@@ -16,7 +19,8 @@ from api.types import (
     UploadResponse, 
     StatusResponse,
     DocumentsListResponse,
-    DeleteResponse
+    DeleteResponse,
+    Message as MessageType
 )
 
 logger = logging.getLogger(LOGGER_NAME)
@@ -34,13 +38,15 @@ def chat_endpoint(request: ChatRequest) -> ChatResponse:
         )
     
     try:
+        # Save user message to database
+        rag_service.save_chat_message(sender="user", content=request.question)
+        
         relevant_chunks = rag_service.retrieval_chunks(request.question)
         
         if not relevant_chunks:
-            return ChatResponse(
-                status="error",
-                error="No relevant content found in the documents for your question."
-            )
+            ai_response = "No relevant content found in the documents for your question."
+            rag_service.save_chat_message(sender="ai", content=ai_response)
+            return ChatResponse(status="error", error=ai_response)
             
         context = ""
         sources = []
@@ -50,7 +56,14 @@ def chat_endpoint(request: ChatRequest) -> ChatResponse:
         
         final_sources_str = ", ".join(sources)
 
-        prompt = f"""Based on the following context from the loaded documents, answer the question accurately and concisely. Include specific page numbers and source filenames for your answer.
+        # Get existing chat history from database
+        chat_history = rag_service.get_chat_history()
+        history_prompt = "\n".join([f"{msg['sender']}: {msg['content']}" for msg in chat_history])
+        
+        prompt = f"""Based on the following context from the loaded documents and the chat history, answer the question accurately and concisely. Include specific page numbers and source filenames for your answer.
+
+                Chat History:
+                {history_prompt}
 
                 Context:
                 {context}
@@ -62,6 +75,9 @@ def chat_endpoint(request: ChatRequest) -> ChatResponse:
         result = llm_service.chat(prompt)
         
         if result["status"] == "success":
+            # Save AI response to database
+            rag_service.save_chat_message(sender="ai", content=result["answer"])
+            
             return ChatResponse(
                 status="success",
                 answer=result["answer"],
@@ -69,6 +85,7 @@ def chat_endpoint(request: ChatRequest) -> ChatResponse:
                 chunks_used=len(relevant_chunks)
             )
         else:
+            rag_service.save_chat_message(sender="ai", content="LLM error: " + result.get('error', 'Unknown error'))
             return ChatResponse(
                 status="error",
                 error=f"LLM error: {result.get('error', 'Unknown error')}"
@@ -134,7 +151,6 @@ async def upload_pdf(file: UploadFile = File(...)) -> UploadResponse:
 
 @router.delete("/documents/{document_id}", response_model=DeleteResponse)
 def delete_document_endpoint(document_id: str):
-    """Delete a single document and its associated chunks"""
     try:
         success = rag_service.delete_document(document_id)
         if success:
@@ -153,7 +169,6 @@ def delete_document_endpoint(document_id: str):
 
 @router.delete("/documents", response_model=DeleteResponse)
 def clear_all_documents_endpoint():
-    """Clear all loaded documents and their associated chunks"""
     try:
         rag_service.clear_all_documents()
         return DeleteResponse(
@@ -166,10 +181,17 @@ def clear_all_documents_endpoint():
 
 @router.get("/documents", response_model=DocumentsListResponse)
 def get_documents_list():
-    """List all currently loaded documents"""
     return DocumentsListResponse(
         documents=list(rag_service.loaded_documents.values())
     )
+
+@router.get("/chat-history", response_model=List[MessageType])
+def get_chat_history_endpoint():
+    try:
+        return rag_service.get_chat_history()
+    except Exception as e:
+        logger.error(f"Chat history endpoint error: {e}")
+        raise HTTPException(status_code=500, detail="Failed to retrieve chat history.")
 
 @router.get("/status", response_model=StatusResponse)
 def get_status() -> StatusResponse:

@@ -1,6 +1,10 @@
 # api/types.py
 from pydantic import BaseModel
-from typing import Optional, List
+from typing import Optional, List, Dict
+
+class Message(BaseModel):
+    sender: str
+    content: str
 
 class ChatRequest(BaseModel):
     question: str

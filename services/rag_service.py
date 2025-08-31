@@ -7,15 +7,15 @@ from langchain_community.document_loaders import PyPDFLoader
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from pathlib import Path
 import uuid
+from sqlalchemy.orm import Session
 
 from services.retrieval_strategies import RetrievalMethod, RetrievalStrategy, KeywordRetrieval, SemanticRetrieval, HybridRetrieval
 from services.config import LOGGER_NAME
+from database.chat_db import get_db, Message
 
 logger = logging.getLogger(LOGGER_NAME)
 
 class RAGService:
-    """Main service for RAG document processing and retrieval"""
-    
     _instance = None
     
     def __new__(cls, *args, **kwargs):
@@ -43,34 +43,27 @@ class RAGService:
         if self.retrieval_method == method:
             return
         
-        # This is not fully memory safe as Python's GC is non-deterministic
-        # but it's the best approach without a dedicated memory manager.
         self._current_strategy = self._create_strategy(method)
         self.retrieval_method = method
         logger.info(f"Switched retrieval method to {method.value}")
     
     def has_documents(self) -> bool:
-        """Check if any documents are loaded"""
         return len(self.loaded_documents) > 0
     
     def get_chunks_count(self) -> int:
-        """Get number of processed chunks"""
         return self._current_strategy.get_chunks_count()
     
     def process_pdf_file(self, file_path: str) -> Dict[str, Union[str, int]]:
-        """Process PDF file into retrievalable chunks - memory optimized"""
         document_id = str(uuid.uuid4())
         document_name = Path(file_path).name
         
         try:
-            # Load PDF document
             loader = PyPDFLoader(file_path)
             documents = loader.load()
             
             if not documents:
                 return {"error": "No content extracted from PDF", "status": "error"}
             
-            # Split into chunks
             text_splitter = RecursiveCharacterTextSplitter(
                 chunk_size=1000,
                 chunk_overlap=200
@@ -80,7 +73,6 @@ class RAGService:
             if not chunks:
                 return {"error": "Failed to create chunks from document", "status": "error"}
             
-            # Add document to store
             logger.info(f"Processing {len(chunks)} chunks using {self.retrieval_method.value} retrieval")
             setup_success = self._current_strategy.add_document(document_id, document_name, chunks)
             
@@ -88,7 +80,6 @@ class RAGService:
                 logger.error("Failed to setup document store")
                 return {"error": "Failed to setup document storage", "status": "error"}
             
-            # Store document metadata
             self.loaded_documents[document_id] = document_name
             
             return {
@@ -104,8 +95,7 @@ class RAGService:
             logger.error(f"Error processing PDF: {e}")
             return {"error": str(e), "status": "error"}
     
-    def retrieval_chunks(self, question: str, top_k: int = 3) -> List[str]:
-        """retrieval for relevant chunks using current strategy"""
+    def retrieval_chunks(self, question: str, top_k: int = 3) -> List[Dict]:
         if not self.has_documents():
             logger.warning("No documents available for retrieval")
             return []
@@ -117,10 +107,49 @@ class RAGService:
             raise
     
     def get_status(self) -> Dict[str, Union[str, int, bool]]:
-        """Get detailed system status"""
         return {
             "current_method": self.retrieval_method.value,
             "document_loaded": ", ".join(self.loaded_documents.values()) if self.loaded_documents else None,
             "chunks_available": self.get_chunks_count(),
             "ready_for_queries": self.has_documents()
         }
+        
+    def save_chat_message(self, sender: str, content: str):
+        db_gen = get_db()
+        db = next(db_gen)
+        try:
+            new_message = Message(sender=sender, content=content)
+            db.add(new_message)
+            db.commit()
+            db.refresh(new_message)
+        except Exception as e:
+            logger.error(f"Failed to save chat message: {e}")
+        finally:
+            db.close()
+            
+    def get_chat_history(self) -> List[Dict]:
+        db_gen = get_db()
+        db = next(db_gen)
+        try:
+            messages = db.query(Message).order_by(Message.timestamp).all()
+            return [{"sender": msg.sender, "content": msg.content} for msg in messages]
+        except Exception as e:
+            logger.error(f"Failed to retrieve chat history: {e}")
+            return []
+        finally:
+            db.close()
+            
+    def delete_document(self, document_id: str) -> bool:
+        if document_id not in self.loaded_documents:
+            return False
+        
+        success = self._current_strategy.delete_document(document_id)
+        if success:
+            del self.loaded_documents[document_id]
+        return success
+
+    def clear_all_documents(self) -> bool:
+        success = self._current_strategy.clear_all_documents()
+        if success:
+            self.loaded_documents.clear()
+        return success
