@@ -9,13 +9,12 @@ from api.types import (
     ChatRequest, 
     ChatResponse, 
     UploadResponse, 
-    StatusResponse, 
-    LocalPDFRequest
+    StatusResponse
 )
 
-router = APIRouter()
-rag_service = RAGService()
-llm_service = LLMService()
+router: APIRouter = APIRouter()
+rag_service: RAGService = RAGService()
+llm_service: LLMService = LLMService()
 
 @router.post("/chat", response_model=ChatResponse)
 def chat_endpoint(request: ChatRequest) -> ChatResponse:
@@ -44,12 +43,12 @@ def chat_endpoint(request: ChatRequest) -> ChatResponse:
         # Create prompt with context
         prompt = f"""Based on the following context from the document "{rag_service.current_document}", answer the question accurately and concisely.
 
-                    Context:
-                    {context}
+                Context:
+                {context}
 
-                    Question: {request.question}
+                Question: {request.question}
 
-                    Answer:"""
+                Answer:"""
         
         # Get LLM response
         result = llm_service.chat(prompt)
@@ -127,39 +126,6 @@ async def upload_pdf(file: UploadFile = File(...)) -> UploadResponse:
                 os.unlink(temp_path)
             except:
                 pass
-
-@router.post("/process-local-pdf", response_model=UploadResponse)
-def process_local_pdf(request: LocalPDFRequest) -> UploadResponse:
-    """Process PDF file from local file system"""
-    
-    if not os.path.exists(request.pdf_path):
-        return UploadResponse(
-            status="error",
-            error="File not found"
-        )
-    
-    try:
-        result = rag_service.process_pdf_file(request.pdf_path)
-        
-        if result["status"] == "success":
-            return UploadResponse(
-                status="success",
-                filename=result["filename"],
-                pages=result["pages"],
-                chunks=result["chunks"],
-                message=result["message"]
-            )
-        else:
-            return UploadResponse(
-                status="error",
-                error=result["error"]
-            )
-            
-    except Exception as e:
-        return UploadResponse(
-            status="error",
-            error=f"Processing failed: {str(e)}"
-        )
 
 @router.get("/status", response_model=StatusResponse)
 def get_status() -> StatusResponse:

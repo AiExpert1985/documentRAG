@@ -8,9 +8,6 @@ from typing import Optional, List
 class ChatRequest(BaseModel):
     question: str
 
-class LocalPDFRequest(BaseModel):
-    pdf_path: str
-
 # Response Schemas  
 class ChatResponse(BaseModel):
     status: str
