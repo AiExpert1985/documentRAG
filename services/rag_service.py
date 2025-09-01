@@ -1,128 +1,154 @@
 # services/rag_service.py
 import logging
-from typing import List, Optional, Dict, Union, Any
+from typing import List, Dict, Any
+
 from langchain_community.document_loaders import PyPDFLoader
 from langchain.text_splitter import RecursiveCharacterTextSplitter
-import uuid
+from sqlalchemy import select, delete, func
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from sqlalchemy import select, delete
+from services.retrieval_strategies import RetrievalStrategy, HybridRetrieval, SemanticRetrieval
+from services.config import settings
+from database.chat_db import Document
 
-from services.retrieval_strategies import RetrievalMethod, RetrievalStrategy, KeywordRetrieval, SemanticRetrieval, HybridRetrieval
-from services.config import LOGGER_NAME
-from database.chat_db import AsyncSessionLocal, Message
-
-logger = logging.getLogger(LOGGER_NAME)
+logger = logging.getLogger(settings.LOGGER_NAME)
 
 class RAGService:
-    def __init__(self, retrieval_method: RetrievalMethod = RetrievalMethod.SEMANTIC):
-        self._current_strategy: RetrievalStrategy = self._create_strategy(retrieval_method)
-        self.retrieval_method = retrieval_method
-        self.loaded_documents: Dict[str, str] = {}
-        logger.info("RAG service initialized")
+    """
+    Orchestrates the RAG (Retrieval-Augmented Generation) pipeline.
 
-    def _create_strategy(self, method: RetrievalMethod) -> RetrievalStrategy:
-        if method == RetrievalMethod.SEMANTIC:
-            return SemanticRetrieval()
-        elif method == RetrievalMethod.KEYWORD:
-            return KeywordRetrieval()
-        elif method == RetrievalMethod.HYBRID:
-            return HybridRetrieval()
+    This service is stateless. It does not hold any document information in memory.
+    All state is persisted in the database, which is accessed via the `db` session
+    passed into its methods. It relies on a `RetrievalStrategy` for the actual
+    vector search implementation.
+    """
 
-    def has_documents(self) -> bool:
-        return len(self.loaded_documents) > 0
+    def __init__(self, strategy: RetrievalStrategy):
+        """
+        Initializes the RAGService with a specific retrieval strategy.
 
-    def get_chunks_count(self) -> int:
-        return self._current_strategy.get_chunks_count()
+        Args:
+            strategy: An instance of a class that implements RetrievalStrategy.
+        """
+        self._current_strategy = strategy
+        logger.info(f"RAG service initialized with strategy: {type(strategy).__name__}")
 
-    async def process_pdf_file(self, file_path: str, original_filename: str) -> Dict[str, Any]:
-        document_id = str(uuid.uuid4())
+    async def has_documents(self, db: AsyncSession) -> bool:
+        """Checks if any documents are present in the database."""
+        result = await db.execute(select(func.count(Document.id)))
+        return result.scalar_one() > 0
+
+    async def get_chunks_count(self) -> int:
+        """
+        Gets the total number of chunks from the retrieval strategy.
+        This count comes from the vector store (e.g., ChromaDB), not the SQL database.
+        """
+        strategy_to_query = self._current_strategy
+        # If using hybrid, we query the underlying semantic strategy's collection
+        if isinstance(self._current_strategy, HybridRetrieval):
+            strategy_to_query = self._current_strategy.semantic
         
+        if hasattr(strategy_to_query, 'collection'):
+            try:
+                return strategy_to_query.collection.count()
+            except Exception as e:
+                logger.error(f"Could not get chunk count from vector store: {e}")
+        return 0
+
+    async def process_pdf_file(self, db: AsyncSession, file_path: str, original_filename: str, file_hash: str) -> Dict[str, Any]:
+        """
+        Processes a PDF file, creates a database entry, and ingests it into the vector store.
+        This operation is transactional: if vector ingestion fails, the DB entry is rolled back.
+        """
+        document_id = None
         try:
+            # 1. Create a DB entry for the document.
+            new_doc = Document(filename=original_filename, file_hash=file_hash)
+            db.add(new_doc)
+            await db.commit()
+            await db.refresh(new_doc)
+            document_id = new_doc.id
+
+            # 2. Process the PDF and split it into chunks.
+            logger.info(f"Loading and splitting PDF: {original_filename}")
             loader = PyPDFLoader(file_path)
             documents = loader.load()
-            
-            if not documents:
-                return {"error": "No content extracted from PDF", "status": "error"}
-            
             text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
             chunks = text_splitter.split_documents(documents)
             
             if not chunks:
-                return {"error": "Failed to create chunks", "status": "error"}
-            
+                 raise ValueError("PDF processing resulted in zero chunks.")
+
+            # 3. Add the document chunks to the vector store.
+            logger.info(f"Adding {len(chunks)} chunks to vector store for document ID: {document_id}")
             success = await self._current_strategy.add_document(document_id, original_filename, chunks)
             
             if not success:
-                return {"error": "Failed to store document", "status": "error"}
+                # This will trigger the exception block to roll back the DB operation.
+                raise RuntimeError("Failed to store document chunks in the vector database.")
             
-            self.loaded_documents[document_id] = original_filename
-            
+            logger.info(f"Successfully processed and ingested document: {original_filename}")
             return {
-                "status": "success",
-                "filename": original_filename,
-                "pages": len(documents),
-                "chunks": len(chunks),
-                "message": f"PDF processed into {len(chunks)} chunks",
-                "retrieval_method": self.retrieval_method.value
+                "status": "success", "filename": original_filename,
+                "pages": len(documents), "chunks": len(chunks)
             }
-            
         except Exception as e:
-            logger.error(f"Error processing PDF: {e}")
+            logger.error(f"Error processing PDF '{original_filename}': {e}", exc_info=True)
+            # If any step fails, roll back the database commit.
+            if document_id:
+                logger.warning(f"Rolling back database entry for document ID: {document_id}")
+                await db.execute(delete(Document).where(Document.id == document_id))
+                await db.commit()
             return {"error": str(e), "status": "error"}
 
-    async def retrieve_chunks(self, question: str, top_k: int = 3) -> List[Dict]:
-        if not self.has_documents():
+    async def retrieve_chunks(self, db: AsyncSession, question: str, top_k: int = 3) -> List[Dict]:
+        """Retrieves relevant chunks for a given question."""
+        if not await self.has_documents(db):
+            logger.warning("Attempted to retrieve chunks, but no documents are loaded.")
             return []
         
-        try:
-            return await self._current_strategy.retrieve(question, top_k)
-        except Exception as e:
-            logger.error(f"Retrieval failed: {e}")
-            return []
+        logger.info(f"Retrieving top {top_k} chunks for question.")
+        return await self._current_strategy.retrieve(question, top_k)
 
-    def get_status(self) -> Dict[str, Union[str, int, bool]]:
-        return {
-            "current_method": self.retrieval_method.value,
-            "document_loaded": ", ".join(self.loaded_documents.values()) if self.loaded_documents else None,
-            "chunks_available": self.get_chunks_count(),
-            "ready_for_queries": self.has_documents()
-        }
-        
-    async def save_chat_message(self, sender: str, content: str) -> bool:
-        async with AsyncSessionLocal() as db:
-            try:
-                new_message = Message(sender=sender, content=content)
-                db.add(new_message)
-                await db.commit()
-                return True
-            except Exception as e:
-                logger.error(f"Failed to save chat message: {e}")
-                await db.rollback()
-                return False
-            
-    async def get_chat_history(self, limit: int = 50) -> List[Dict]:
-        async with AsyncSessionLocal() as db:
-            try:
-                result = await db.execute(
-                    select(Message).order_by(Message.timestamp.desc()).limit(limit)
-                )
-                messages = result.scalars().all()
-                return [{"sender": msg.sender, "content": msg.content} for msg in reversed(messages)]
-            except Exception as e:
-                logger.error(f"Failed to get chat history: {e}")
-                return []
-            
-    async def delete_document(self, document_id: str) -> bool:
-        if document_id not in self.loaded_documents:
+    async def list_documents(self, db: AsyncSession) -> List[Dict[str, str]]:
+        """Lists all documents currently stored in the database."""
+        result = await db.execute(select(Document).order_by(Document.timestamp.desc()))
+        docs = result.scalars().all()
+        return [{"id": doc.id, "filename": doc.filename} for doc in docs]
+
+    async def delete_document(self, db: AsyncSession, document_id: str) -> bool:
+        """
+        Deletes a document from both the vector store and the SQL database.
+        """
+        doc_to_delete = await db.get(Document, document_id)
+        if not doc_to_delete:
+            logger.warning(f"Attempted to delete non-existent document with ID: {document_id}")
             return False
         
+        logger.info(f"Deleting document from vector store: ID {document_id}")
         success = await self._current_strategy.delete_document(document_id)
+        
         if success:
-            del self.loaded_documents[document_id]
-        return success
+            logger.info(f"Deleting document from database: ID {document_id}")
+            await db.delete(doc_to_delete)
+            await db.commit()
+            return True
+        
+        logger.error(f"Failed to delete document from vector store: ID {document_id}. Database entry will not be removed.")
+        return False
 
-    async def clear_all_documents(self) -> bool:
+    async def clear_all_documents(self, db: AsyncSession) -> bool:
+        """
+        Clears all documents from the vector store and the SQL database.
+        """
+        logger.info("Clearing all documents from vector store.")
         success = await self._current_strategy.clear_all_documents()
+        
         if success:
-            self.loaded_documents.clear()
-        return success
+            logger.info("Clearing all document entries from the database.")
+            await db.execute(delete(Document))
+            await db.commit()
+            return True
+
+        logger.error("Failed to clear documents from vector store. Database entries will not be removed.")
+        return False

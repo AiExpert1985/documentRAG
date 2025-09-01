@@ -343,8 +343,28 @@ function addToChat(sender, message, cssClass) {
     return messageDiv;
 }
 
-function clearChat() {
-    const chatHistory = document.getElementById('chatHistory');
-    chatHistory.innerHTML = '';
-    addToChat('System', 'Chat history cleared. Ready for new questions!', 'system-message');
+async function clearChat() {
+    if (!confirm("Are you sure you want to permanently delete the chat history?")) {
+        return;
+    }
+
+    try {
+        const response = await fetch(`${API_BASE}/chat-history`, {
+            method: 'DELETE'
+        });
+
+        if (!response.ok) {
+            const errorResult = await response.json();
+            throw new Error(errorResult.detail || 'Failed to clear chat history.');
+        }
+
+        // If the backend deletion was successful, now clear the UI
+        const chatHistory = document.getElementById('chatHistory');
+        chatHistory.innerHTML = '';
+        addToChat('System', 'Chat history cleared. Ready for new questions!', 'system-message success');
+
+    } catch (error) {
+        console.error("Clear chat error:", error);
+        addToChat('System', `❌ Error: ${error.message}`, 'system-message error');
+    }
 }

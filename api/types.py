@@ -15,22 +15,18 @@ class ChatRequest(BaseModel):
 
 class ChatResponse(BaseModel):
     status: str
-    answer: Optional[str] = None
-    error: Optional[str] = None
+    answer: str
     document: Optional[str] = None
     chunks_used: Optional[int] = None
 
 class UploadResponse(BaseModel):
     status: str
-    filename: Optional[str] = None
-    pages: Optional[int] = None
-    chunks: Optional[int] = None
-    message: Optional[str] = None
-    error: Optional[str] = None
-    retrieval_method: Optional[str] = None
+    filename: str
+    pages: int
+    chunks: int
+    message: str
 
 class StatusResponse(BaseModel):
-    current_method: str = "unknown"
     document_loaded: Optional[str] = None
     chunks_available: int = 0
     ready_for_queries: bool = False
@@ -40,4 +36,4 @@ class DocumentsListResponse(BaseModel):
 
 class DeleteResponse(BaseModel):
     status: str
-    message: Optional[str] = None
+    message: str

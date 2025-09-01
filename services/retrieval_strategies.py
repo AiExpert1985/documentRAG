@@ -1,22 +1,50 @@
 # services/retrieval_strategies.py
 import logging
 from abc import ABC, abstractmethod
-from typing import List, Any, Dict, Optional
+from typing import List, Any, Dict
 from enum import Enum
 import re
+from collections import defaultdict
 
-from sentence_transformers import SentenceTransformer
-import chromadb
-from chromadb.utils import embedding_functions
+from chromadb import Client, Collection
+from chromadb.utils.embedding_functions import SentenceTransformerEmbeddingFunction
 
-from services.config import LOGGER_NAME, VECTOR_DB_PATH, EMBEDDING_MODEL_NAME
+from services.config import settings
 
-logger = logging.getLogger(LOGGER_NAME)
+logger = logging.getLogger(settings.LOGGER_NAME)
 
 class RetrievalMethod(Enum):
     KEYWORD = "keyword"
     SEMANTIC = "semantic"
     HYBRID = "hybrid"
+
+def reciprocal_rank_fusion(results: List[List[Dict]], k: int = 60) -> List[Dict]:
+    """
+    Performs Reciprocal Rank Fusion on multiple lists of search results.
+    Each result dictionary must have a unique 'id' field.
+    """
+    ranked_lists = [
+        {item['id']: 1 / (rank + k) for rank, item in enumerate(sublist)}
+        for sublist in results
+    ]
+    
+    fused_scores = defaultdict(float)
+    for r_list in ranked_lists:
+        for doc_id, score in r_list.items():
+            fused_scores[doc_id] += score
+            
+    # Create a master dictionary of all unique documents
+    all_docs = {}
+    for sublist in results:
+        for doc in sublist:
+            all_docs[doc['id']] = doc
+
+    reranked_results = [
+        all_docs[doc_id]
+        for doc_id, score in sorted(fused_scores.items(), key=lambda x: x[1], reverse=True)
+    ]
+    
+    return reranked_results
 
 class RetrievalStrategy(ABC):
     @abstractmethod
@@ -34,94 +62,40 @@ class RetrievalStrategy(ABC):
     @abstractmethod
     async def clear_all_documents(self) -> bool:
         pass
-    
-    @abstractmethod
-    def get_chunks_count(self) -> int:
-        pass
 
 class KeywordRetrieval(RetrievalStrategy):
+    """
+    NOTE: This is a placeholder for a robust keyword search.
+    The previous in-memory implementation was not scalable.
+    For production, this should be replaced with a real sparse index like BM25.
+    """
     def __init__(self):
-        self.documents: dict = {}
-    
+        logger.warning("KeywordRetrieval is using a non-scalable placeholder implementation.")
+
     async def add_document(self, document_id: str, document_name: str, chunks: List[Any]) -> bool:
-        try:
-            self.documents[document_id] = {"name": document_name, "chunks": chunks}
-            return True
-        except Exception as e:
-            logger.error(f"Failed to add document: {e}")
-            return False
+        return True # Placeholder
     
     async def retrieve(self, question: str, top_k: int = 3) -> List[Dict]:
-        if not self.documents:
-            return []
-        
-        all_chunks = []
-        for doc_id, doc_data in self.documents.items():
-            for i, chunk in enumerate(doc_data['chunks']):
-                all_chunks.append({
-                    "content": chunk.page_content,
-                    "metadata": {
-                        "document_id": doc_id,
-                        "document_name": doc_data['name'],
-                        "page": chunk.metadata.get("page", "N/A"),
-                        "chunk_index": i
-                    }
-                })
-
-        question_words = set(re.findall(r'\w+', question.lower()))
-        scored_chunks = []
-        
-        for chunk in all_chunks:
-            content_words = set(re.findall(r'\w+', chunk['content'].lower()))
-            intersection = question_words.intersection(content_words)
-            
-            if intersection:
-                score = len(intersection) / len(question_words)
-                scored_chunks.append((chunk, score))
-        
-        scored_chunks.sort(key=lambda x: x[1], reverse=True)
-        return [chunk for chunk, _ in scored_chunks[:top_k]]
+        return [] # Placeholder
     
     async def delete_document(self, document_id: str) -> bool:
-        if document_id in self.documents:
-            del self.documents[document_id]
-            return True
-        return False
+        return True # Placeholder
 
     async def clear_all_documents(self) -> bool:
-        self.documents = {}
-        return True
-    
-    def get_chunks_count(self) -> int:
-        return sum(len(doc['chunks']) for doc in self.documents.values())
+        return True # Placeholder
 
 class SemanticRetrieval(RetrievalStrategy):
-    _model = None
-    _client = None
-
-    def __init__(self):
-        if SemanticRetrieval._model is None:
-            SemanticRetrieval._model = SentenceTransformer(EMBEDDING_MODEL_NAME)
-        
-        if SemanticRetrieval._client is None:
-            SemanticRetrieval._client = chromadb.PersistentClient(path=VECTOR_DB_PATH)
-        
-        self.collection = SemanticRetrieval._client.get_or_create_collection(
+    def __init__(self, client: Client, embedding_function: SentenceTransformerEmbeddingFunction):
+        self.collection: Collection = client.get_or_create_collection(
             name="rag_chunks",
-            embedding_function=embedding_functions.SentenceTransformerEmbeddingFunction(
-                model_name=EMBEDDING_MODEL_NAME
-            )
+            embedding_function=embedding_function
         )
     
     async def add_document(self, document_id: str, document_name: str, chunks: List[Any]) -> bool:
         try:
             texts = [chunk.page_content for chunk in chunks]
             metadatas = [
-                {
-                    "document_id": document_id, 
-                    "document_name": document_name, 
-                    "page": chunk.metadata.get("page", -1) + 1,
-                }
+                {"document_id": document_id, "document_name": document_name, "page": chunk.metadata.get("page", -1) + 1}
                 for chunk in chunks
             ]
             ids = [f"{document_id}_{i}" for i in range(len(chunks))]
@@ -129,29 +103,24 @@ class SemanticRetrieval(RetrievalStrategy):
             self.collection.add(documents=texts, metadatas=metadatas, ids=ids)
             return True
         except Exception as e:
-            logger.error(f"Failed to add document: {e}")
+            logger.error(f"Failed to add document to ChromaDB: {e}")
             return False
     
     async def retrieve(self, question: str, top_k: int = 3) -> List[Dict]:
-        if not self.collection.count():
-            return []
-        
         try:
-            results = self.collection.query(
-                query_texts=[question], n_results=top_k,
-                include=['metadatas', 'documents']
-            )
+            results = self.collection.query(query_texts=[question], n_results=top_k, include=['metadatas', 'documents'])
             
-            chunks = []
-            if results['documents'] and results['documents'][0]:
-                for i in range(len(results['documents'][0])):
-                    chunks.append({
+            retrieved_chunks = []
+            if results['ids'] and results['ids'][0]:
+                for i in range(len(results['ids'][0])):
+                    retrieved_chunks.append({
+                        "id": results['ids'][0][i],
                         "content": results['documents'][0][i],
                         "metadata": results['metadatas'][0][i]
                     })
-            return chunks
+            return retrieved_chunks
         except Exception as e:
-            logger.error(f"Retrieval failed: {e}")
+            logger.error(f"Semantic retrieval failed: {e}")
             return []
     
     async def delete_document(self, document_id: str) -> bool:
@@ -159,67 +128,47 @@ class SemanticRetrieval(RetrievalStrategy):
             self.collection.delete(where={"document_id": document_id})
             return True
         except Exception as e:
-            logger.error(f"Delete failed: {e}")
+            logger.error(f"Delete document from ChromaDB failed: {e}")
             return False
 
     async def clear_all_documents(self) -> bool:
         try:
-            SemanticRetrieval._client.delete_collection("rag_chunks")
-            self.collection = SemanticRetrieval._client.create_collection(
-                name="rag_chunks",
-                embedding_function=embedding_functions.SentenceTransformerEmbeddingFunction(
-                    model_name=EMBEDDING_MODEL_NAME
-                )
+            # Re-creating the collection is a reliable way to clear it
+            self.collection._client.delete_collection(self.collection.name)
+            self.collection = self.collection._client.create_collection(
+                name=self.collection.name,
+                embedding_function=self.collection._embedding_function
             )
             return True
         except Exception as e:
-            logger.error(f"Clear failed: {e}")
+            logger.error(f"Clear all from ChromaDB failed: {e}")
             return False
-    
-    def get_chunks_count(self) -> int:
-        try:
-            return self.collection.count()
-        except:
-            return 0
 
 class HybridRetrieval(RetrievalStrategy):
-    def __init__(self):
-        self.keyword = KeywordRetrieval()
-        self.semantic = SemanticRetrieval()
+    def __init__(self, semantic_strategy: SemanticRetrieval, keyword_strategy: KeywordRetrieval):
+        self.semantic = semantic_strategy
+        self.keyword = keyword_strategy
     
     async def add_document(self, document_id: str, document_name: str, chunks: List[Any]) -> bool:
-        kw_success = await self.keyword.add_document(document_id, document_name, chunks)
         sem_success = await self.semantic.add_document(document_id, document_name, chunks)
-        return kw_success and sem_success
+        kw_success = await self.keyword.add_document(document_id, document_name, chunks)
+        return sem_success and kw_success
     
     async def retrieve(self, question: str, top_k: int = 3) -> List[Dict]:
+        # Fetch more results from each retriever to provide a good pool for fusion
         kw_results = await self.keyword.retrieve(question, top_k * 2)
         sem_results = await self.semantic.retrieve(question, top_k * 2)
         
-        # Simple combination - semantic results get higher weight
-        combined = {}
-        for i, chunk in enumerate(sem_results):
-            combined[chunk['content'][:100]] = {"chunk": chunk, "score": 0.7 / (i + 1)}
+        fused_results = reciprocal_rank_fusion([sem_results, kw_results])
         
-        for i, chunk in enumerate(kw_results):
-            key = chunk['content'][:100]
-            if key in combined:
-                combined[key]["score"] += 0.3 / (i + 1)
-            else:
-                combined[key] = {"chunk": chunk, "score": 0.3 / (i + 1)}
-        
-        sorted_results = sorted(combined.values(), key=lambda x: x['score'], reverse=True)
-        return [item['chunk'] for item in sorted_results[:top_k]]
+        return fused_results[:top_k]
     
     async def delete_document(self, document_id: str) -> bool:
-        kw_success = await self.keyword.delete_document(document_id)
         sem_success = await self.semantic.delete_document(document_id)
-        return kw_success and sem_success
+        kw_success = await self.keyword.delete_document(document_id)
+        return sem_success and kw_success
             
     async def clear_all_documents(self) -> bool:
-        kw_success = await self.keyword.clear_all_documents()
         sem_success = await self.semantic.clear_all_documents()
-        return kw_success and sem_success
-    
-    def get_chunks_count(self) -> int:
-        return self.semantic.get_chunks_count()
+        kw_success = await self.keyword.clear_all_documents()
+        return sem_success and kw_success
