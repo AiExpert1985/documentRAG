@@ -7,7 +7,7 @@ from langchain.text_splitter import RecursiveCharacterTextSplitter
 from sqlalchemy import select, delete, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from services.retrieval_strategies import RetrievalStrategy, HybridRetrieval, SemanticRetrieval
+from services.retrieval_strategies import RetrievalStrategy, SemanticRetrieval
 from services.config import settings
 from database.chat_db import Document
 
@@ -40,17 +40,12 @@ class RAGService:
 
     async def get_chunks_count(self) -> int:
         """
-        Gets the total number of chunks from the retrieval strategy.
-        This count comes from the vector store (e.g., ChromaDB), not the SQL database.
+        Gets the total number of chunks from the retrieval strategy's vector store.
         """
-        strategy_to_query = self._current_strategy
-        # If using hybrid, we query the underlying semantic strategy's collection
-        if isinstance(self._current_strategy, HybridRetrieval):
-            strategy_to_query = self._current_strategy.semantic
-        
-        if hasattr(strategy_to_query, 'collection'):
+        # Since we only use SemanticRetrieval, we can access its collection directly.
+        if hasattr(self._current_strategy, 'collection'):
             try:
-                return strategy_to_query.collection.count()
+                return self._current_strategy.collection.count()
             except Exception as e:
                 logger.error(f"Could not get chunk count from vector store: {e}")
         return 0

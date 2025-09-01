@@ -12,7 +12,7 @@ from services.config import settings
 from database.chat_db import Base, async_engine
 from services.llm_service import LLMService
 from services.rag_service import RAGService
-from services.retrieval_strategies import SemanticRetrieval, KeywordRetrieval, HybridRetrieval
+from services.retrieval_strategies import SemanticRetrieval
 
 # Setup logging as the first step
 setup_logging()
@@ -41,22 +41,17 @@ async def lifespan(app: FastAPI):
     app.state.llm_service = LLMService(base_url=settings.LLM_BASE_URL, model=settings.LLM_MODEL_NAME)
     logger.info(f"LLM service configured for model '{settings.LLM_MODEL_NAME}'.")
 
-    # Initialize Retrieval Strategies (singletons)
+    # Initialize Retrieval Strategy (singleton)
     semantic_retrieval = SemanticRetrieval(chroma_client, embedding_function)
-    keyword_retrieval = KeywordRetrieval() # Placeholder
-    hybrid_retrieval = HybridRetrieval(semantic_retrieval, keyword_retrieval)
 
     # Initialize RAG Service (singleton)
-    # Using Hybrid Retrieval as the default strategy
-    app.state.rag_service = RAGService(strategy=hybrid_retrieval)
-    logger.info("RAG service initialized with HybridRetrieval strategy.")
+    app.state.rag_service = RAGService(strategy=semantic_retrieval)
+    logger.info("RAG service initialized with SemanticRetrieval strategy.")
     
     yield
     
     # --- Shutdown ---
     logger.info("Application shutdown...")
-    # Resources are automatically managed or don't require explicit cleanup.
-    # If you had, e.g., a Redis connection pool, you would close it here.
 
 app = FastAPI(title=settings.APP_TITLE, lifespan=lifespan)
 app.mount("/static", StaticFiles(directory="static"), name="static")
