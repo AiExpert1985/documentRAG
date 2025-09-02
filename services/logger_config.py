@@ -1,7 +1,7 @@
 # services/logger_config.py
 import logging
 from logging.handlers import RotatingFileHandler
-from services.config import settings  # Import the central settings instance
+from services.config import settings 
 
 def setup_logging():
     """

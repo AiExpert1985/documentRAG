@@ -1,6 +1,6 @@
 # services/rag_service.py
 import logging
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Tuple
 
 from langchain_community.document_loaders import PyPDFLoader
 from langchain.text_splitter import RecursiveCharacterTextSplitter
@@ -35,7 +35,7 @@ class RAGService:
 
     async def has_documents(self, db: AsyncSession) -> bool:
         """Checks if any documents are present in the database."""
-        result = await db.execute(select(func.count(Document.id)))
+        result: Tuple[int] = await db.execute(select(func.count(Document.id)))
         return result.scalar_one() > 0
 
     async def get_chunks_count(self) -> int:

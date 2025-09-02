@@ -9,7 +9,7 @@ class Settings(BaseSettings):
     """
     # Logger configuration
     LOGGER_NAME: str = "rag_system_logger"
-    LOG_FILE_PATH: str = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'rag_system.log')
+    LOG_FILE_PATH: str = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'log', 'rag_system.log')
 
     # Database and models
     DATABASE_URL: str = "sqlite+aiosqlite:///./chat.db"
