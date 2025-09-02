@@ -29,9 +29,12 @@ class RetrievalStrategy(ABC):
 
 class SemanticRetrieval(RetrievalStrategy):
     def __init__(self, client: Client, embedding_function: SentenceTransformerEmbeddingFunction):
-        self.collection: Collection = client.get_or_create_collection(
-            name="rag_chunks",
-            embedding_function=embedding_function
+        self._client = client
+        self._embedding_function = embedding_function
+        self.collection_name = "rag_chunks"
+        self.collection: Collection = self._client.get_or_create_collection(
+            name=self.collection_name,
+            embedding_function=self._embedding_function
         )
     
     async def add_document(self, document_id: str, document_name: str, chunks: List[Any]) -> bool:
@@ -46,7 +49,7 @@ class SemanticRetrieval(RetrievalStrategy):
             self.collection.add(documents=texts, metadatas=metadatas, ids=ids)
             return True
         except Exception as e:
-            logger.error(f"Failed to add document to ChromaDB: {e}")
+            logger.error(f"Failed to add document to ChromaDB: {e}", exc_info=True)
             return False
     
     async def retrieve(self, question: str, top_k: int = 3) -> List[Dict]:
@@ -63,7 +66,7 @@ class SemanticRetrieval(RetrievalStrategy):
                     })
             return retrieved_chunks
         except Exception as e:
-            logger.error(f"Semantic retrieval failed: {e}")
+            logger.error(f"Semantic retrieval failed: {e}", exc_info=True)
             return []
     
     async def delete_document(self, document_id: str) -> bool:
@@ -71,18 +74,19 @@ class SemanticRetrieval(RetrievalStrategy):
             self.collection.delete(where={"document_id": document_id})
             return True
         except Exception as e:
-            logger.error(f"Delete document from ChromaDB failed: {e}")
+            logger.error(f"Delete document from ChromaDB failed: {e}", exc_info=True)
             return False
 
     async def clear_all_documents(self) -> bool:
         try:
-            # Re-creating the collection is a reliable way to clear it
-            self.collection._client.delete_collection(self.collection.name)
-            self.collection = self.collection._client.create_collection(
-                name=self.collection.name,
-                embedding_function=self.collection._embedding_function
+            # This is a safer way to clear and reset the collection state
+            self._client.delete_collection(name=self.collection_name)
+            self.collection = self._client.get_or_create_collection(
+                name=self.collection_name,
+                embedding_function=self._embedding_function
             )
+            logger.info(f"ChromaDB collection '{self.collection_name}' cleared and re-created successfully.")
             return True
         except Exception as e:
-            logger.error(f"Clear all from ChromaDB failed: {e}")
+            logger.error(f"Clear all from ChromaDB failed: {e}", exc_info=True)
             return False

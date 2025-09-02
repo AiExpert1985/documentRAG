@@ -15,7 +15,7 @@ class ChatRequest(BaseModel):
 
 class ChatResponse(BaseModel):
     status: str
-    answer: str
+    answer: Optional[str] = None
     document: Optional[str] = None
     chunks_used: Optional[int] = None
 

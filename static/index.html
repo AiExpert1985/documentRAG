@@ -48,13 +48,8 @@
         </div>
 
         <div class="chat-input-container">
-            <input type="text" id="chatInput" placeholder="Ask a question..." class="chat-input">
+            <textarea id="chatInput" placeholder="Ask a question..." class="chat-input" rows="1"></textarea>
             <button id="sendChatBtn" class="send-btn">Send</button>
-        </div>
-
-        <div class="chat-help">
-            <small>Example questions: "What is the main topic?", "Can you summarize this document?", "What are the
-                key findings?"</small>
         </div>
     </div>
 
@@ -64,6 +59,16 @@
             <button id="refreshStatusBtn" class="secondary-btn">Refresh</button>
         </div>
         <div id="statusInfo"></div>
+    </div>
+    
+    <div id="confirmationModal" class="modal-overlay">
+        <div class="modal-content">
+            <p id="modalMessage">Are you sure?</p>
+            <div class="modal-buttons">
+                <button id="cancelBtn" class="secondary-btn">Cancel</button>
+                <button id="confirmBtn" class="primary-btn danger">Confirm</button>
+            </div>
+        </div>
     </div>
 
     <script src="/static/app.js"></script>

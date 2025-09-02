@@ -2,21 +2,24 @@
 
 # --- Core Web Framework ---
 fastapi
-uvicorn[standard]  # Includes high-performance server components
-pydantic-settings  # For loading config from environment variables
+uvicorn[standard]
+pydantic-settings
 
 # --- Database ---
 sqlalchemy[asyncio]
-aiosqlite  # Async driver for SQLite
+aiosqlite
 
 # --- AI / RAG Components ---
 langchain
 langchain-community
-pypdf  # For loading PDF documents
+pypdf
 
 # --- Vector Store & Embeddings ---
-chromadb
+chromadb-client
 sentence-transformers
 
 # --- LLM Service Communication ---
 requests
+
+# --- Utilities ---
+Werkzeug
