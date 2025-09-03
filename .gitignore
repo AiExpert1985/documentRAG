@@ -35,7 +35,7 @@ rag_system.log
 # Databases
 *.db
 *.sqlite
-vector_db/
+/vector_db/
 
 # Temporary files
 *.tmp
