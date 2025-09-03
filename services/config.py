@@ -14,9 +14,11 @@ class Settings(BaseSettings):
     # Database and models
     DATABASE_URL: str = "sqlite+aiosqlite:///./chat.db"
     VECTOR_DB_PATH: str = "./vector_db"
-    EMBEDDING_MODEL_NAME: str = "all-MiniLM-L6-v2"
+    # EMBEDDING_MODEL_NAME: str = "all-MiniLM-L6-v2"
+    EMBEDDING_MODEL_NAME: str = "paraphrase-multilingual-mpnet-base-v2" # Arabic support
     LLM_MODEL_NAME: str = "llama3.1:8b"
     LLM_BASE_URL: str = "http://localhost:11434"
+    CHAT_CONTEXT_LIMIT: int = 4
 
     # Basic limits
     MAX_FILE_SIZE: int = 50 * 1024 * 1024  # 50MB

@@ -72,9 +72,21 @@ async def chat_endpoint(
             context += f"Source: {chunk['metadata']['document_name']}, Page: {chunk['metadata']['page']}\n{chunk['content']}\n\n"
             sources.add(f"{chunk['metadata']['document_name']}, p. {chunk['metadata']['page']}")
         sources_str = ", ".join(sorted(list(sources)))
-        chat_history = await get_chat_history(db, limit=5)
+        chat_history = await get_chat_history(db, limit=settings.CHAT_CONTEXT_LIMIT)
         history_prompt = "\n".join([f"{msg['sender']}: {msg['content']}" for msg in chat_history])
-        prompt = f"Based on the following context and chat history, answer the user's question accurately. Cite the sources used in your answer.\n\nChat History:\n{history_prompt}\n\nContext:\n{context}\nQuestion: {request.question}\n\nAnswer:"
+        prompt = f"""Based on the provided context and chat history, give a precise and helpful answer to the user's question.
+                Respond in the same language as the user's question.
+                Cite any sources used from the context.
+
+                Chat History:
+                {history_prompt}
+
+                Context:
+                {context}
+
+                Question: {request.question}
+
+                Answer:"""
         result = llm_service.chat(prompt)
         if result["status"] == "success":
             await save_chat_message(db, "ai", result["answer"])

@@ -377,7 +377,8 @@ input[type="file"]:hover {
 
 /* --- NEW MODAL STYLES --- */
 .modal-overlay {
-    display: none; /* Hidden by default */
+    display: none;
+    /* Hidden by default */
     position: fixed;
     z-index: 1000;
     left: 0;
@@ -392,8 +393,13 @@ input[type="file"]:hover {
 }
 
 @keyframes fadeIn {
-    from { opacity: 0; }
-    to { opacity: 1; }
+    from {
+        opacity: 0;
+    }
+
+    to {
+        opacity: 1;
+    }
 }
 
 .modal-content {
@@ -405,14 +411,21 @@ input[type="file"]:hover {
     max-width: 400px;
     border-radius: 10px;
     text-align: center;
-    box-shadow: 0 5px 15px rgba(0,0,0,0.3);
+    box-shadow: 0 5px 15px rgba(0, 0, 0, 0.3);
     transform: scale(0.9);
     animation: scaleIn 0.3s ease forwards;
 }
 
 @keyframes scaleIn {
-    from { transform: scale(0.9); opacity: 0; }
-    to { transform: scale(1); opacity: 1; }
+    from {
+        transform: scale(0.9);
+        opacity: 0;
+    }
+
+    to {
+        transform: scale(1);
+        opacity: 1;
+    }
 }
 
 .modal-content p {
@@ -430,6 +443,24 @@ input[type="file"]:hover {
 .primary-btn.danger {
     background-color: #dc3545;
 }
+
 .primary-btn.danger:hover {
     background-color: #c82333;
+}
+
+/* --- RTL Language Support --- */
+.message.rtl {
+    direction: rtl;
+    text-align: right;
+}
+
+/* This fixes the header (sender name, timestamp) alignment in RTL messages */
+.message.rtl .message-header {
+    flex-direction: row-reverse;
+}
+
+/* This ensures the sender name stays on the correct side */
+.message.rtl .message-header .ai-sender {
+    margin-left: 10px;
+    margin-right: 0;
 }

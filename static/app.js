@@ -263,10 +263,23 @@ function highlightUploadSection() {
     }, 3000);
 }
 
+// static/app.js
+
+function isArabic(text) {
+    // This regex checks for the presence of characters in the Arabic Unicode block.
+    const arabicRegex = /[\u0600-\u06FF]/;
+    return arabicRegex.test(text);
+}
+
 function addToChat(sender, message, cssClass) {
     const chatHistory = document.getElementById('chatHistory');
     const messageDiv = document.createElement('div');
     messageDiv.className = `message ${cssClass}`;
+
+    // --- NEW: Language Detection and Styling ---
+    if (isArabic(message)) {
+        messageDiv.classList.add('rtl');
+    }
 
     // Sanitize message to prevent HTML injection
     const sanitizedMessage = message.replace(/</g, "&lt;").replace(/>/g, "&gt;");
@@ -274,6 +287,7 @@ function addToChat(sender, message, cssClass) {
     if (sender === 'System') {
         messageDiv.innerHTML = `<div class="system-content">${sanitizedMessage.replace(/\n/g, '<br>')}</div>`;
     } else {
+        const senderClass = sender === 'You' ? 'user-sender' : 'ai-sender';
         messageDiv.innerHTML = `
             <div class="message-header">
                 <strong>${sender}</strong>
