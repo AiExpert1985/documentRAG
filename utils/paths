@@ -1,0 +1,24 @@
+
+# utils.paths
+
+
+import os
+
+def get_project_root():
+    """Returns the absolute path to the project's root directory."""
+    # This assumes the utils/paths.py file is located inside the project directory
+    return os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+
+def setup_log_directory():
+    """
+    Creates the log directory and returns the absolute log file path.
+    """
+    project_root = get_project_root()
+    log_dir = os.path.join(project_root, 'log')
+    log_file_path = os.path.join(log_dir, 'rag_system.log')
+
+    # Create log directory if it doesn't exist
+    if not os.path.exists(log_dir):
+        os.makedirs(log_dir)
+        
+    return log_file_path
