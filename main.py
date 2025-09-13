@@ -8,9 +8,8 @@ from chromadb.utils import embedding_functions
 
 from api.endpoints import router
 from services.logger_config import setup_logging
-from services.config import settings
+from config import settings
 from database.chat_db import Base, async_engine
-from services.llm_service import LLMService
 from services.rag_service import RAGService
 from services.retrieval_strategies import SemanticRetrieval
 
@@ -37,10 +36,6 @@ async def lifespan(app: FastAPI):
     )
     logger.info(f"Embedding model '{settings.EMBEDDING_MODEL_NAME}' loaded.")
     
-    # Initialize LLM Service (singleton)
-    app.state.llm_service = LLMService(base_url=settings.LLM_BASE_URL, model=settings.LLM_MODEL_NAME)
-    logger.info(f"LLM service configured for model '{settings.LLM_MODEL_NAME}'.")
-
     # Initialize Retrieval Strategy (singleton)
     semantic_retrieval = SemanticRetrieval(chroma_client, embedding_function)
 
@@ -53,10 +48,10 @@ async def lifespan(app: FastAPI):
     # --- Shutdown ---
     logger.info("Application shutdown...")
 
-app = FastAPI(title=settings.APP_TITLE, lifespan=lifespan)
+app = FastAPI(title="Intelligent Reference System", lifespan=lifespan)
 app.mount("/static", StaticFiles(directory="static"), name="static")
 app.include_router(router)
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run(app, host="0.0.0.0", port=8000)  

@@ -1,4 +1,5 @@
 # services/rag_service.py
+import asyncio
 import logging
 from typing import List, Dict, Any
 
@@ -9,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from pypdf.errors import PdfReadError
 
 from services.retrieval_strategies import RetrievalStrategy
-from services.config import settings
+from config import settings
 from database.chat_db import Document
 
 logger = logging.getLogger(settings.LOGGER_NAME)
@@ -26,7 +27,8 @@ class RAGService:
     async def get_chunks_count(self) -> int:
         if hasattr(self._current_strategy, 'collection'):
             try:
-                return self._current_strategy.collection.count()
+                # collection.count() is a blocking call
+                return await asyncio.to_thread(self._current_strategy.collection.count)
             except Exception as e:
                 logger.error(f"Could not get chunk count from vector store: {e}")
         return 0
@@ -42,13 +44,15 @@ class RAGService:
 
             logger.info(f"Loading and splitting PDF: {original_filename}")
             loader = PyPDFLoader(file_path)
-            documents = loader.load()
+            # Run the blocking 'load' method in a separate thread
+            documents = await asyncio.to_thread(loader.load)
             
             if not documents:
                 raise ValueError("No content could be extracted from the PDF. It may be empty or image-based.")
 
             text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
-            chunks = text_splitter.split_documents(documents)
+            # Run the blocking 'split_documents' method in a separate thread
+            chunks = await asyncio.to_thread(text_splitter.split_documents, documents)
             
             if not chunks:
                  raise ValueError("PDF content could not be split into chunks.")

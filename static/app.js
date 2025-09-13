@@ -128,6 +128,8 @@ async function uploadPDF() {
     }
 }
 
+// static/app.js
+
 async function askQuestion() {
     if (isTyping) return;
     const chatInput = document.getElementById('chatInput');
@@ -138,10 +140,10 @@ async function askQuestion() {
     chatInput.value = '';
 
     isTyping = true;
-    const typingIndicator = addToChat('AI', '💭 Thinking...', 'ai-message typing');
+    const typingIndicator = addToChat('AI', '💭 Searching...', 'ai-message typing');
 
     try {
-        const response = await fetch(`${API_BASE}/chat`, {
+        const response = await fetch(`${API_BASE}/search`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ question: question })
@@ -151,20 +153,24 @@ async function askQuestion() {
         if (typingIndicator) typingIndicator.remove();
 
         if (!response.ok) {
-            if (response.status === 400) {
-                addToChat('AI', `📋 ${result.detail}\n\nOnce a document is uploaded, I can answer questions about it!`, 'ai-message');
-                highlightUploadSection();
-            } else {
-                addToChat('AI', `❌ ${result.detail || 'An unknown error occurred'}`, 'ai-message error');
-            }
-            return;
+            throw new Error(result.detail || 'An unknown error occurred');
         }
 
-        let message = result.answer;
-        if (result.document && result.chunks_used) {
-            message += `\n\n📄 Sources: ${result.document}`;
+        // --- NEW LOGIC TO HANDLE SEARCH RESULTS ---
+        if (result.results && result.results.length > 0) {
+            addToChat('AI', `I found ${result.total_results} relevant snippets for your query:`, 'ai-message');
+
+            result.results.forEach(chunk => {
+                // Format each result into a clear message
+                let message = `📄 **From: ${chunk.document_name} (Page ${chunk.page_number})**\n\n`;
+                message += `"${chunk.content_snippet}"`;
+                addToChat('AI', message, 'ai-message');
+            });
+
+        } else {
+            addToChat('AI', "I couldn't find any relevant snippets for your query in the loaded documents.", 'ai-message');
         }
-        addToChat('AI', message, 'ai-message');
+        // --- END OF NEW LOGIC ---
 
     } catch (error) {
         if (typingIndicator) typingIndicator.remove();
@@ -223,20 +229,29 @@ async function listDocuments() {
     }
 } // <-- THIS WAS THE MISSING BRACE
 
+
 async function loadChatHistory() {
     try {
-        const response = await fetch(`${API_BASE}/chat-history`);
+        const response = await fetch(`${API_BASE}/search-history`);
         if (response.ok) {
             const history = await response.json();
-            history.forEach(message => {
-                addToChat(
-                    message.sender === 'user' ? 'You' : 'AI',
-                    message.content,
-                    message.sender === 'user' ? 'user-message' : 'ai-message'
-                );
+
+            // This logic correctly handles the data from your backend
+            history.forEach(searchEvent => {
+                // Since the history only contains search queries,
+                // we'll display them as "You" messages.
+                // We use searchEvent.query instead of the non-existent message.content
+                if (searchEvent.query) {
+                    addToChat(
+                        'You',
+                        searchEvent.query,
+                        'user-message'
+                    );
+                }
             });
         }
     } catch (error) {
+        // This will now log the actual error object to the console for better debugging
         console.error("Failed to load chat history:", error);
     }
 }
@@ -339,7 +354,7 @@ async function clearAllDocuments() {
 
 async function clearChat() {
     try {
-        const response = await fetch(`${API_BASE}/chat-history`, { method: 'DELETE' });
+        const response = await fetch(`${API_BASE}/search-history`, { method: 'DELETE' });
         if (!response.ok) {
             const errorResult = await response.json();
             throw new Error(errorResult.detail || 'Failed to clear chat history.');

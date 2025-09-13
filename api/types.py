@@ -1,6 +1,6 @@
 # api/types.py
 from pydantic import BaseModel
-from typing import Optional, List
+from typing import Optional, List, Dict
 
 class Message(BaseModel):
     sender: str
@@ -13,11 +13,17 @@ class DocumentsListItem(BaseModel):
 class ChatRequest(BaseModel):
     question: str
 
-class ChatResponse(BaseModel):
+class SearchResult(BaseModel):
+    document_name: str
+    page_number: int
+    content_snippet: str
+    document_id: str
+
+class SearchResponse(BaseModel):
     status: str
-    answer: Optional[str] = None
-    document: Optional[str] = None
-    chunks_used: Optional[int] = None
+    query: str
+    results: List[SearchResult]
+    total_results: int
 
 class UploadResponse(BaseModel):
     status: str

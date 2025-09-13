@@ -1,4 +1,5 @@
 # services/retrieval_strategies.py
+import asyncio
 import logging
 from abc import ABC, abstractmethod
 from typing import List, Any, Dict
@@ -6,7 +7,7 @@ from typing import List, Any, Dict
 from chromadb import Client, Collection
 from chromadb.utils.embedding_functions import SentenceTransformerEmbeddingFunction
 
-from services.config import settings
+from config import settings
 
 logger = logging.getLogger(settings.LOGGER_NAME)
 
@@ -46,7 +47,13 @@ class SemanticRetrieval(RetrievalStrategy):
             ]
             ids = [f"{document_id}_{i}" for i in range(len(chunks))]
             
-            self.collection.add(documents=texts, metadatas=metadatas, ids=ids)
+            # Run the blocking 'add' method in a separate thread
+            await asyncio.to_thread(
+                self.collection.add, 
+                documents=texts, 
+                metadatas=metadatas, 
+                ids=ids
+            )
             return True
         except Exception as e:
             logger.error(f"Failed to add document to ChromaDB: {e}", exc_info=True)
@@ -54,7 +61,13 @@ class SemanticRetrieval(RetrievalStrategy):
     
     async def retrieve(self, question: str, top_k: int = 3) -> List[Dict]:
         try:
-            results = self.collection.query(query_texts=[question], n_results=top_k, include=['metadatas', 'documents'])
+            # Run the blocking 'query' method in a separate thread
+            results = await asyncio.to_thread(
+                self.collection.query,
+                query_texts=[question], 
+                n_results=top_k, 
+                include=['metadatas', 'documents']
+            )
             
             retrieved_chunks = []
             if results['ids'] and results['ids'][0]:
@@ -71,7 +84,11 @@ class SemanticRetrieval(RetrievalStrategy):
     
     async def delete_document(self, document_id: str) -> bool:
         try:
-            self.collection.delete(where={"document_id": document_id})
+            # Run the blocking 'delete' method in a separate thread
+            await asyncio.to_thread(
+                self.collection.delete, 
+                where={"document_id": document_id}
+            )
             return True
         except Exception as e:
             logger.error(f"Delete document from ChromaDB failed: {e}", exc_info=True)
@@ -80,8 +97,10 @@ class SemanticRetrieval(RetrievalStrategy):
     async def clear_all_documents(self) -> bool:
         try:
             # This is a safer way to clear and reset the collection state
-            self._client.delete_collection(name=self.collection_name)
-            self.collection = self._client.get_or_create_collection(
+            await asyncio.to_thread(self._client.delete_collection, name=self.collection_name)
+            
+            self.collection = await asyncio.to_thread(
+                self._client.get_or_create_collection,
                 name=self.collection_name,
                 embedding_function=self._embedding_function
             )

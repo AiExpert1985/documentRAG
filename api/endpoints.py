@@ -11,11 +11,10 @@ from fastapi import APIRouter, UploadFile, File, HTTPException, Depends, Request
 from fastapi.responses import HTMLResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from services.config import settings
+from config import settings
 from services.rag_service import RAGService
-from services.llm_service import LLMService
 from database.chat_db import get_file_hash, check_file_hash, AsyncSessionLocal, Message, Document
-from api.types import ChatRequest, ChatResponse, UploadResponse, StatusResponse, DocumentsListResponse, DeleteResponse, Message as MessageType, DocumentsListItem
+from api.types import ChatRequest, SearchResponse, UploadResponse, StatusResponse, DocumentsListResponse, DeleteResponse, Message as MessageType, DocumentsListItem
 
 logger = logging.getLogger(settings.LOGGER_NAME)
 router = APIRouter()
@@ -26,79 +25,83 @@ async def get_db() -> AsyncGenerator[AsyncSession, None]:
         yield session
 def get_rag_service(request: Request) -> RAGService:
     return request.app.state.rag_service
-def get_llm_service(request: Request) -> LLMService:
-    return request.app.state.llm_service
-async def save_chat_message(db: AsyncSession, sender: str, content: str):
+async def save_search_query(db: AsyncSession, query: str, results_count: int):
     try:
-        new_message = Message(sender=sender, content=content)
+        new_message = Message(sender="search", content=f"Query: {query} | Results: {results_count}")
         db.add(new_message)
         await db.commit()
     except Exception as e:
-        logger.error(f"Failed to save chat message: {e}")
+        logger.error(f"Failed to save search query: {e}")
         await db.rollback()
-async def get_chat_history(db: AsyncSession, limit: int = 10) -> List[Dict]:
+async def get_search_history(db: AsyncSession, limit: int = 10) -> List[Dict]:
     try:
-        result = await db.execute(select(Message).order_by(Message.timestamp.desc()).limit(limit))
+        result = await db.execute(select(Message).where(Message.sender == "search").order_by(Message.timestamp.desc()).limit(limit))
         messages = result.scalars().all()
-        return [{"sender": msg.sender, "content": msg.content} for msg in reversed(messages)]
+        return [{"query": msg.content, "timestamp": msg.timestamp} for msg in reversed(messages)]
     except Exception as e:
-        logger.error(f"Failed to get chat history: {e}")
+        logger.error(f"Failed to get search history: {e}")
         return []
 
-# --- Updated API Endpoints ---
-@router.post("/chat", response_model=ChatResponse)
-async def chat_endpoint(
+# --- Updated Search Endpoint ---
+@router.post("/search", response_model=SearchResponse)
+async def search_endpoint(
     request: ChatRequest,
     db: AsyncSession = Depends(get_db),
-    rag_service: RAGService = Depends(get_rag_service),
-    llm_service: LLMService = Depends(get_llm_service)
-) -> ChatResponse:
+    rag_service: RAGService = Depends(get_rag_service)
+) -> SearchResponse:
     if not 3 <= len(request.question) <= 2000:
-        raise HTTPException(status_code=422, detail="Question must be between 3 and 2000 characters.")
+        raise HTTPException(status_code=422, detail="Search query must be between 3 and 2000 characters.")
     if not await rag_service.has_documents(db):
         raise HTTPException(status_code=400, detail="Please upload a PDF document first.")
     
-    # The rest of the function logic is correct and remains the same...
     try:
-        await save_chat_message(db, "user", request.question)
-        relevant_chunks = await rag_service.retrieve_chunks(db, request.question)
+        relevant_chunks = await rag_service.retrieve_chunks(db, request.question, top_k=5)
         if not relevant_chunks:
-            ai_response = "I could not find any relevant content in the document to answer your question."
-            await save_chat_message(db, "ai", ai_response)
-            return ChatResponse(status="success", answer=ai_response)
-        context = ""
-        sources = set()
+            await save_search_query(db, request.question, 0)
+            return SearchResponse(status="success", query=request.question, results=[], total_results=0)
+        
+        # Format results for frontend
+        search_results = []
         for chunk in relevant_chunks:
-            context += f"Source: {chunk['metadata']['document_name']}, Page: {chunk['metadata']['page']}\n{chunk['content']}\n\n"
-            sources.add(f"{chunk['metadata']['document_name']}, p. {chunk['metadata']['page']}")
-        sources_str = ", ".join(sorted(list(sources)))
-        chat_history = await get_chat_history(db, limit=settings.CHAT_CONTEXT_LIMIT)
-        history_prompt = "\n".join([f"{msg['sender']}: {msg['content']}" for msg in chat_history])
-        prompt = f"""Based on the provided context and chat history, give a precise and helpful answer to the user's question.
-                Respond in the same language as the user's question.
-                Cite any sources used from the context.
-
-                Chat History:
-                {history_prompt}
-
-                Context:
-                {context}
-
-                Question: {request.question}
-
-                Answer:"""
-        result = llm_service.chat(prompt)
-        if result["status"] == "success":
-            await save_chat_message(db, "ai", result["answer"])
-            return ChatResponse(status="success", answer=result["answer"], document=sources_str, chunks_used=len(relevant_chunks))
-        else:
-            error_msg = f"AI service error: {result.get('error', 'Unknown error')}"
-            await save_chat_message(db, "ai", error_msg)
-            raise HTTPException(status_code=503, detail=error_msg)
+            search_results.append({
+                "document_name": chunk['metadata']['document_name'],
+                "page_number": chunk['metadata']['page'],
+                "content_snippet": chunk['content'][:300] + "..." if len(chunk['content']) > 300 else chunk['content'],
+                "document_id": chunk['metadata']['document_id']
+            })
+        
+        await save_search_query(db, request.question, len(search_results))
+        return SearchResponse(
+            status="success", 
+            query=request.question, 
+            results=search_results, 
+            total_results=len(search_results)
+        )
+        
     except Exception as e:
-        logger.error(f"Chat endpoint error: {e}", exc_info=True)
+        logger.error(f"Search endpoint error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="An internal processing error occurred.")
 
+# Add document download endpoint
+@router.get("/documents/{document_id}/download")
+async def download_document(
+    document_id: str,
+    db: AsyncSession = Depends(get_db)
+):
+    try:
+        # Get document from database
+        document = await db.get(Document, document_id)
+        if not document:
+            raise HTTPException(status_code=404, detail="Document not found")
+        
+        # For now, return document info - you'll need to implement actual file serving
+        return {"document_name": document.filename, "document_id": document.id}
+        
+    except Exception as e:
+        logger.error(f"Document download error: {e}")
+        raise HTTPException(status_code=500, detail="Failed to download document")
+
+# Upload endpoint remains the same
 @router.post("/upload-pdf", response_model=UploadResponse)
 async def upload_pdf(
     file: UploadFile = File(...),
@@ -138,6 +141,7 @@ async def upload_pdf(
         if temp_path and os.path.exists(temp_path):
             os.unlink(temp_path)
 
+# Other endpoints remain the same
 @router.delete("/documents/{document_id}", response_model=DeleteResponse)
 async def delete_document_endpoint(
     document_id: str,
@@ -151,33 +155,32 @@ async def delete_document_endpoint(
         raise HTTPException(status_code=404, detail="Document not found.")
     return DeleteResponse(status="success", message="Document deleted successfully.")
 
-# The other endpoints (clear_all, clear_history, get_documents, etc.) are correct and remain the same...
 @router.delete("/documents", response_model=DeleteResponse)
 async def clear_all_documents_endpoint(db: AsyncSession = Depends(get_db), rag_service: RAGService = Depends(get_rag_service)):
     await rag_service.clear_all_documents(db)
     return DeleteResponse(status="success", message="All documents cleared successfully.")
 
-@router.delete("/chat-history", response_model=DeleteResponse)
-async def clear_chat_history_endpoint(db: AsyncSession = Depends(get_db)):
+@router.delete("/search-history", response_model=DeleteResponse)
+async def clear_search_history_endpoint(db: AsyncSession = Depends(get_db)):
     try:
-        await db.execute(delete(Message))
+        await db.execute(delete(Message).where(Message.sender == "search"))
         await db.commit()
-        logger.info("Chat history has been cleared.")
-        return DeleteResponse(status="success", message="Chat history cleared successfully.")
+        logger.info("Search history has been cleared.")
+        return DeleteResponse(status="success", message="Search history cleared successfully.")
     except Exception as e:
-        logger.error(f"Failed to clear chat history: {e}", exc_info=True)
+        logger.error(f"Failed to clear search history: {e}", exc_info=True)
         await db.rollback()
-        raise HTTPException(status_code=500, detail="Failed to clear chat history.")
+        raise HTTPException(status_code=500, detail="Failed to clear search history.")
 
 @router.get("/documents", response_model=DocumentsListResponse)
 async def get_documents_list_endpoint(db: AsyncSession = Depends(get_db), rag_service: RAGService = Depends(get_rag_service)):
     documents_list = await rag_service.list_documents(db)
     return DocumentsListResponse(documents=[DocumentsListItem(**doc) for doc in documents_list])
 
-@router.get("/chat-history", response_model=List[MessageType])
-async def get_chat_history_endpoint(db: AsyncSession = Depends(get_db)):
-    history = await get_chat_history(db, limit=100)
-    return [MessageType(sender=msg["sender"], content=msg["content"]) for msg in history]
+@router.get("/search-history", response_model=List[Dict])
+async def get_search_history_endpoint(db: AsyncSession = Depends(get_db)):
+    history = await get_search_history(db, limit=50)
+    return history
 
 @router.get("/status", response_model=StatusResponse)
 async def get_status_endpoint(db: AsyncSession = Depends(get_db), rag_service: RAGService = Depends(get_rag_service)):
