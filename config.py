@@ -1,5 +1,6 @@
 # config.py
 """Enhanced configuration with new settings"""
+from typing import List
 from pydantic_settings import BaseSettings
 from utils.paths import get_log_file_path
 
@@ -15,7 +16,7 @@ class Settings(BaseSettings):
     
     # Vector store
     VECTOR_DB_PATH: str = "./vector_db"
-    VECTOR_STORE_TYPE: str = "chromadb"  # Can be switched to "weaviate", "pinecone", etc.
+    VECTOR_STORE_TYPE: str = "chromadb"
     
     # Embedding model
     EMBEDDING_MODEL_NAME: str = "paraphrase-multilingual-mpnet-base-v2"
@@ -24,8 +25,13 @@ class Settings(BaseSettings):
     CHUNK_SIZE: int = 1000
     CHUNK_OVERLAP: int = 200
     MAX_FILE_SIZE: int = 50 * 1024 * 1024  # 50MB
-    SUPPORTED_FILE_TYPES: list = ["pdf"]  # Can be extended to ["pdf", "docx", "txt"]
     
+    # OCR Configuration
+    DEFAULT_OCR_STRATEGY: str = "unstructured"
+    PREFERRED_OCR_ENGINE: str = "easyocr"
+    OCR_DPI: int = 300
+    OCR_LANGUAGES: List[str] = ["ar", "en"]
+
     # API settings
     REQUEST_TIMEOUT: int = 60
     MAX_SEARCH_RESULTS: int = 10
@@ -34,7 +40,8 @@ class Settings(BaseSettings):
     APP_TITLE: str = "Document RAG System"
     APP_VERSION: str = "2.0.0"
     
-    # Performance settings
+    # --- ADDED MISSING SETTINGS ---
+    # Performance
     USE_CONNECTION_POOLING: bool = True
     MAX_CONNECTIONS: int = 10
     

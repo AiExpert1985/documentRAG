@@ -2,10 +2,11 @@
 """Refactored API endpoints with proper service layer"""
 import os
 import tempfile
-from typing import AsyncGenerator, List, Dict
+import re
+from typing import AsyncGenerator, List, Dict, Optional
 from pathlib import Path
 
-from fastapi import APIRouter, UploadFile, File, HTTPException, Depends, Request
+from fastapi import APIRouter, UploadFile, File, Form, HTTPException, Depends, Request
 from fastapi.responses import HTMLResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from werkzeug.utils import secure_filename
@@ -13,7 +14,6 @@ from werkzeug.utils import secure_filename
 from config import settings
 from core.interfaces import IRAGService
 from database.chat_db import AsyncSessionLocal
-# --- ADDED IMPORT ---
 from infrastructure.repositories import SQLMessageRepository
 from services.factory import ServiceFactory
 from api.types import (
@@ -29,17 +29,13 @@ async def get_db() -> AsyncGenerator[AsyncSession, None]:
     async with AsyncSessionLocal() as session:
         yield session
 
-def get_rag_service(
-    request: Request,
-    db: AsyncSession = Depends(get_db)
-) -> IRAGService:
+def get_rag_service(db: AsyncSession = Depends(get_db)) -> IRAGService:
     """Get RAG service instance"""
     return ServiceFactory.create_rag_service(db)
 
 # Utility functions
 def validate_document_id(doc_id: str) -> bool:
     """Validate document ID format"""
-    import re
     uuid_pattern = r'^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$'
     return bool(re.match(uuid_pattern, doc_id, re.IGNORECASE))
 
@@ -60,7 +56,7 @@ async def search_endpoint(
     if not status["ready_for_queries"]:
         raise HTTPException(
             status_code=400,
-            detail="Please upload a PDF document first"
+            detail="Please upload a document first"
         )
     
     results = await rag_service.search(request.question, top_k=5)
@@ -88,22 +84,25 @@ async def search_endpoint(
 @router.post("/upload-pdf", response_model=UploadResponse)
 async def upload_pdf(
     file: UploadFile = File(...),
+    processing_strategy: Optional[str] = Form(None),
     rag_service: IRAGService = Depends(get_rag_service)
 ) -> UploadResponse:
-    """Upload and process PDF"""
-    if not file.filename or not file.filename.lower().endswith('.pdf'):
-        raise HTTPException(
-            status_code=400,
-            detail="Only PDF files are supported"
-        )
+    """
+    Upload and process a PDF.
+    
+    You can optionally specify a processing_strategy in the form data:
+    - **auto**: (Default) System tries to detect if OCR is needed.
+    - **unstructured**: Forces direct text extraction.
+    - **easyocr**: Forces OCR processing with EasyOCR.
+    - **paddleocr**: Forces OCR processing with PaddleOCR.
+    """
+    if not file.filename or not file.filename.lower().endswith(('.pdf')):
+        raise HTTPException(status_code=400, detail="Only PDF files are supported")
     
     safe_filename = secure_filename(file.filename)
     
     if file.size and file.size > settings.MAX_FILE_SIZE:
-        raise HTTPException(
-            status_code=413,
-            detail=f"File too large. Maximum size is {settings.MAX_FILE_SIZE // 1024 // 1024}MB"
-        )
+        raise HTTPException(status_code=413, detail=f"File too large. Max size: {settings.MAX_FILE_SIZE // 1024 // 1024}MB")
     
     file_content = await file.read()
     file_hash = get_file_hash(file_content)
@@ -117,22 +116,17 @@ async def upload_pdf(
         result = await rag_service.process_document(
             temp_path,
             safe_filename,
-            file_hash
+            file_hash,
+            processing_strategy=processing_strategy
         )
         
         if result["status"] == "success":
-            return UploadResponse(
-                status="success",
-                filename=result["filename"],
-                pages=result["pages"],
-                chunks=result["chunks"],
-                message=f"Successfully processed '{result['filename']}'"
-            )
+            # Add a message field for the response model
+            result['message'] = f"Successfully processed '{result['filename']}'"
+            return UploadResponse(**result)
         else:
-            raise HTTPException(
-                status_code=400 if "already exists" in result.get("error", "") else 500,
-                detail=result.get("error", "Processing failed")
-            )
+            status_code = 400 if "exists" in result.get("error", "") or "Unsupported" in result.get("error", "") else 500
+            raise HTTPException(status_code=status_code, detail=result.get("error", "Processing failed"))
             
     finally:
         if temp_path and os.path.exists(temp_path):
@@ -191,7 +185,6 @@ async def get_status(
     status = await rag_service.get_status()
     return StatusResponse(**status)
 
-# --- ADDED SEARCH HISTORY ENDPOINTS ---
 @router.get("/search-history", response_model=List[Dict])
 async def get_search_history(
     db: AsyncSession = Depends(get_db)
@@ -213,7 +206,6 @@ async def clear_search_history(
             message="Search history cleared successfully"
         )
     raise HTTPException(status_code=500, detail="Failed to clear search history")
-# --- END ADDED ENDPOINTS ---
 
 @router.get("/", response_class=HTMLResponse, include_in_schema=False)
 async def serve_interface():

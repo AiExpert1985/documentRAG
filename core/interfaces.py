@@ -171,3 +171,13 @@ class IRAGService(ABC):
     async def get_status(self) -> Dict[str, Any]:
         """Get system status"""
         pass
+
+
+# ============= PDF to Image Converter Interface =============
+class IPdfToImageConverter(ABC):
+    """Interface for PDF to image conversion"""
+
+    @abstractmethod
+    def convert(self, file_path: str) -> List[Any]:
+        """Converts a PDF file to a list of images."""
+        pass

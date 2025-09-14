@@ -1,37 +1,82 @@
 # services/document_processor_factory.py
-"""Factory for creating document processor instances"""
-from typing import Dict, Type
+"""Improved factory with proper separation of concerns"""
+from typing import Dict, Type, Optional
 from core.interfaces import IDocumentProcessor
-from infrastructure.document_processors import PDFProcessor
-# To add DOCX support in the future, you would:
-# 1. Create a DOCXProcessor in infrastructure/document_processors.py
-# 2. Import it here: from infrastructure.document_processors import DOCXProcessor
+from infrastructure.document_processors import (
+    PDFProcessor, 
+    EasyOCRProcessor, 
+    PaddleOCRProcessor
+)
+from infrastructure.pdf_converters import PyMuPDFConverter
+from config import settings
 
 class DocumentProcessorFactory:
-    """Factory to get the correct document processor based on file type"""
+    """Factory for document processors with strategy selection"""
     
     def __init__(self):
-        self._processors: Dict[str, Type[IDocumentProcessor]] = {
-            "pdf": PDFProcessor,
-            # "docx": DOCXProcessor, # Add this line to support DOCX files
+        self._pdf_strategies: Dict[str, Type[IDocumentProcessor]] = {
+            "unstructured": PDFProcessor,
+            "easyocr": EasyOCRProcessor,
+            "paddleocr": PaddleOCRProcessor
         }
-
-    def get_processor(self, file_type: str) -> IDocumentProcessor:
-        """
-        Returns an instance of the appropriate document processor.
+        self.pdf_converter = PyMuPDFConverter()
+    
+    def get_processor(
+        self, 
+        file_type: str, 
+        strategy: Optional[str] = None
+    ) -> IDocumentProcessor:
+        """Get appropriate processor based on file type and strategy."""
+        file_type = file_type.lower()
         
-        Args:
-            file_type (str): The file extension (e.g., "pdf", "docx").
-            
-        Returns:
-            IDocumentProcessor: An instance of a class that implements the interface.
-            
-        Raises:
-            ValueError: If the file type is not supported.
-        """
-        processor_class = self._processors.get(file_type.lower())
+        if file_type == "pdf":
+            return self._get_pdf_processor(strategy)
+        # Future: elif file_type == "docx": ...
+        else:
+            raise ValueError(f"Unsupported file type: {file_type}")
+    
+    def _get_pdf_processor(self, strategy: Optional[str]) -> IDocumentProcessor:
+        """Get PDF processor with strategy selection"""
+        final_strategy = strategy or settings.DEFAULT_OCR_STRATEGY
+        
+        processor_class = self._pdf_strategies.get(final_strategy.lower())
         if not processor_class:
-            raise ValueError(f"Unsupported file type: '{file_type}'")
+            available = ", ".join(self._pdf_strategies.keys())
+            raise ValueError(
+                f"Unknown PDF processing strategy: '{final_strategy}'. "
+                f"Available: {available}"
+            )
         
-        # We return a new instance each time
-        return processor_class()
+        if final_strategy.lower() in ["easyocr", "paddleocr"]:
+            return processor_class(pdf_converter=self.pdf_converter)
+        else:
+            return processor_class()
+            
+    def detect_pdf_strategy(self, file_path: str) -> str:
+        """
+        Auto-detect if PDF needs OCR or can use direct extraction.
+        Returns the name of the best strategy.
+        """
+        try:
+            import fitz
+            doc = fitz.open(file_path)
+            
+            # Check first few pages for significant text content
+            total_text_len = 0
+            pages_to_check = min(3, doc.page_count)
+            for i in range(pages_to_check):
+                page = doc[i]
+                total_text_len += len(page.get_text().strip())
+            
+            doc.close()
+            
+            # If average text per page is very low, it's likely a scanned PDF
+            avg_text_len = total_text_len / pages_to_check if pages_to_check > 0 else 0
+            if avg_text_len < 100:
+                return settings.PREFERRED_OCR_ENGINE # e.g., "easyocr"
+            
+            return "unstructured"
+            
+        except Exception:
+            # Default to unstructured on any error during detection
+            return "unstructured"
