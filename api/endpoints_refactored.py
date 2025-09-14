@@ -2,7 +2,7 @@
 """Refactored API endpoints with proper service layer"""
 import os
 import tempfile
-from typing import AsyncGenerator
+from typing import AsyncGenerator, List, Dict
 from pathlib import Path
 
 from fastapi import APIRouter, UploadFile, File, HTTPException, Depends, Request
@@ -13,12 +13,14 @@ from werkzeug.utils import secure_filename
 from config import settings
 from core.interfaces import IRAGService
 from database.chat_db import AsyncSessionLocal
+# --- ADDED IMPORT ---
+from infrastructure.repositories import SQLMessageRepository
 from services.factory import ServiceFactory
 from api.types import (
     ChatRequest, SearchResponse, UploadResponse, 
     StatusResponse, DocumentsListResponse, DeleteResponse
 )
-from utils.helpers import get_file_hash  # <-- MODIFIED IMPORT
+from utils.helpers import get_file_hash
 
 router = APIRouter()
 
@@ -48,14 +50,12 @@ async def search_endpoint(
     rag_service: IRAGService = Depends(get_rag_service)
 ) -> SearchResponse:
     """Search documents"""
-    # Validate input
     if not 3 <= len(request.question) <= 2000:
         raise HTTPException(
             status_code=422,
             detail="Search query must be between 3 and 2000 characters"
         )
     
-    # Check if documents exist
     status = await rag_service.get_status()
     if not status["ready_for_queries"]:
         raise HTTPException(
@@ -63,10 +63,8 @@ async def search_endpoint(
             detail="Please upload a PDF document first"
         )
     
-    # Perform search
     results = await rag_service.search(request.question, top_k=5)
     
-    # Format results
     search_results = []
     for result in results:
         search_results.append({
@@ -93,7 +91,6 @@ async def upload_pdf(
     rag_service: IRAGService = Depends(get_rag_service)
 ) -> UploadResponse:
     """Upload and process PDF"""
-    # Validate file
     if not file.filename or not file.filename.lower().endswith('.pdf'):
         raise HTTPException(
             status_code=400,
@@ -102,26 +99,21 @@ async def upload_pdf(
     
     safe_filename = secure_filename(file.filename)
     
-    # Check file size
     if file.size and file.size > settings.MAX_FILE_SIZE:
         raise HTTPException(
             status_code=413,
             detail=f"File too large. Maximum size is {settings.MAX_FILE_SIZE // 1024 // 1024}MB"
         )
     
-    # Read and hash file
     file_content = await file.read()
     file_hash = get_file_hash(file_content)
     
-    # Process file
     temp_path = None
     try:
-        # Save to temp file
         with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as temp_file:
             temp_file.write(file_content)
             temp_path = temp_file.name
         
-        # Process document
         result = await rag_service.process_document(
             temp_path,
             safe_filename,
@@ -143,7 +135,6 @@ async def upload_pdf(
             )
             
     finally:
-        # Clean up temp file
         if temp_path and os.path.exists(temp_path):
             os.unlink(temp_path)
 
@@ -153,14 +144,12 @@ async def delete_document(
     rag_service: IRAGService = Depends(get_rag_service)
 ) -> DeleteResponse:
     """Delete a document"""
-    # Validate ID
     if not validate_document_id(document_id):
         raise HTTPException(
             status_code=422,
             detail="Invalid document ID format"
         )
     
-    # Delete document
     success = await rag_service.delete_document(document_id)
     if not success:
         raise HTTPException(
@@ -201,6 +190,30 @@ async def get_status(
     """Get system status"""
     status = await rag_service.get_status()
     return StatusResponse(**status)
+
+# --- ADDED SEARCH HISTORY ENDPOINTS ---
+@router.get("/search-history", response_model=List[Dict])
+async def get_search_history(
+    db: AsyncSession = Depends(get_db)
+) -> List[Dict]:
+    """Get recent search history"""
+    message_repo = SQLMessageRepository(db)
+    return await message_repo.get_search_history(limit=50)
+
+@router.delete("/search-history", response_model=DeleteResponse)
+async def clear_search_history(
+    db: AsyncSession = Depends(get_db)
+) -> DeleteResponse:
+    """Clear all search history"""
+    message_repo = SQLMessageRepository(db)
+    success = await message_repo.clear_history()
+    if success:
+        return DeleteResponse(
+            status="success",
+            message="Search history cleared successfully"
+        )
+    raise HTTPException(status_code=500, detail="Failed to clear search history")
+# --- END ADDED ENDPOINTS ---
 
 @router.get("/", response_class=HTMLResponse, include_in_schema=False)
 async def serve_interface():

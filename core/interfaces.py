@@ -155,3 +155,19 @@ class IRAGService(ABC):
     async def delete_document(self, document_id: str) -> bool:
         """Delete a document and its chunks"""
         pass
+        
+    # --- ADDED ABSTRACT METHODS ---
+    @abstractmethod
+    async def clear_all(self) -> bool:
+        """Clear all documents and vectors"""
+        pass
+        
+    @abstractmethod
+    async def list_documents(self) -> List[Dict[str, str]]:
+        """List all documents"""
+        pass
+        
+    @abstractmethod
+    async def get_status(self) -> Dict[str, Any]:
+        """Get system status"""
+        pass
