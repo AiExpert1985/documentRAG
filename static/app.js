@@ -128,8 +128,6 @@ async function uploadPDF() {
     }
 }
 
-// static/app.js
-
 async function askQuestion() {
     if (isTyping) return;
     const chatInput = document.getElementById('chatInput');
@@ -156,12 +154,10 @@ async function askQuestion() {
             throw new Error(result.detail || 'An unknown error occurred');
         }
 
-        // --- NEW LOGIC TO HANDLE SEARCH RESULTS ---
         if (result.results && result.results.length > 0) {
             addToChat('AI', `I found ${result.total_results} relevant snippets for your query:`, 'ai-message');
 
             result.results.forEach(chunk => {
-                // Format each result into a clear message
                 let message = `📄 **From: ${chunk.document_name} (Page ${chunk.page_number})**\n\n`;
                 message += `"${chunk.content_snippet}"`;
                 addToChat('AI', message, 'ai-message');
@@ -170,7 +166,6 @@ async function askQuestion() {
         } else {
             addToChat('AI', "I couldn't find any relevant snippets for your query in the loaded documents.", 'ai-message');
         }
-        // --- END OF NEW LOGIC ---
 
     } catch (error) {
         if (typingIndicator) typingIndicator.remove();
@@ -227,20 +222,14 @@ async function listDocuments() {
     } catch (error) {
         document.getElementById('documentsList').innerHTML = `<li class="error-docs">Error loading documents list.</li>`;
     }
-} // <-- THIS WAS THE MISSING BRACE
-
+}
 
 async function loadChatHistory() {
     try {
         const response = await fetch(`${API_BASE}/search-history`);
         if (response.ok) {
             const history = await response.json();
-
-            // This logic correctly handles the data from your backend
             history.forEach(searchEvent => {
-                // Since the history only contains search queries,
-                // we'll display them as "You" messages.
-                // We use searchEvent.query instead of the non-existent message.content
                 if (searchEvent.query) {
                     addToChat(
                         'You',
@@ -251,7 +240,6 @@ async function loadChatHistory() {
             });
         }
     } catch (error) {
-        // This will now log the actual error object to the console for better debugging
         console.error("Failed to load chat history:", error);
     }
 }
@@ -278,10 +266,7 @@ function highlightUploadSection() {
     }, 3000);
 }
 
-// static/app.js
-
 function isArabic(text) {
-    // This regex checks for the presence of characters in the Arabic Unicode block.
     const arabicRegex = /[\u0600-\u06FF]/;
     return arabicRegex.test(text);
 }
@@ -291,18 +276,15 @@ function addToChat(sender, message, cssClass) {
     const messageDiv = document.createElement('div');
     messageDiv.className = `message ${cssClass}`;
 
-    // --- NEW: Language Detection and Styling ---
     if (isArabic(message)) {
         messageDiv.classList.add('rtl');
     }
 
-    // Sanitize message to prevent HTML injection
     const sanitizedMessage = message.replace(/</g, "&lt;").replace(/>/g, "&gt;");
 
     if (sender === 'System') {
         messageDiv.innerHTML = `<div class="system-content">${sanitizedMessage.replace(/\n/g, '<br>')}</div>`;
     } else {
-        const senderClass = sender === 'You' ? 'user-sender' : 'ai-sender';
         messageDiv.innerHTML = `
             <div class="message-header">
                 <strong>${sender}</strong>

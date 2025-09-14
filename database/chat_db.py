@@ -1,5 +1,4 @@
 # database/chat_db.py
-import hashlib
 import logging
 import uuid
 from datetime import datetime
@@ -35,10 +34,6 @@ class Document(Base):
     timestamp = Column(DateTime, default=datetime.utcnow)
 
 # --- Utility Functions ---
-
-def get_file_hash(file_content: bytes) -> str:
-    """Calculates the SHA256 hash of file content."""
-    return hashlib.sha256(file_content).hexdigest()
 
 async def check_file_hash(db: AsyncSession, file_hash: str) -> bool:
     """
