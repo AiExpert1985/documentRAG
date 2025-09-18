@@ -32,19 +32,3 @@ class Document(Base):
     filename = Column(String, nullable=False)
     file_hash = Column(String, unique=True, index=True, nullable=False)
     timestamp = Column(DateTime, default=datetime.utcnow)
-
-# --- Utility Functions ---
-
-async def check_file_hash(db: AsyncSession, file_hash: str) -> bool:
-    """
-    Checks if a document with the given file hash already exists in the database.
-    """
-    try:
-        result = await db.execute(
-            select(Document).where(Document.file_hash == file_hash)
-        )
-        return result.scalar_one_or_none() is not None
-    except Exception as e:
-        logger.error(f"Error checking file hash '{file_hash}': {e}", exc_info=True)
-        # Fail safe: assume hash exists to prevent re-processing on error
-        return True
