@@ -89,7 +89,9 @@ class EasyOCRProcessor(BaseOCRProcessor):
         image.save(img_byte_arr, format='PNG')
         img_byte_arr = img_byte_arr.getvalue()
         result = await asyncio.to_thread(self.reader.readtext, img_byte_arr, detail=0, paragraph=True)
-        return "\n".join(result)
+        text = "\n".join(result)
+        print(f"--- EasyOCR Raw Output ---\n{text}\n--------------------------") # <-- ADD THIS LINE
+        return text
 
 class PaddleOCRProcessor(BaseOCRProcessor):
     ocr_engine = None
@@ -113,7 +115,9 @@ class PaddleOCRProcessor(BaseOCRProcessor):
         img_byte_arr = img_byte_arr.getvalue()
         result = await asyncio.to_thread(self.ocr_engine.ocr, img_byte_arr, cls=True)
         lines = [line[1][0] for res_part in result for line in res_part]
-        return "\n".join(lines)
+        text = "\n".join(lines)
+        print(f"--- PaddleOCR Raw Output ---\n{text}\n--------------------------") # <-- ADD THIS LINE
+        return text
 
 class PDFProcessor(IDocumentProcessor):
     def __init__(self, chunk_size: int = 1000, chunk_overlap: int = 200):

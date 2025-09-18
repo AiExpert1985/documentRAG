@@ -3,7 +3,10 @@
 import logging
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
-from fastapi.staticfiles import StaticFiles
+
+# --- ADD THESE IMPORTS ---
+from fastapi.middleware.cors import CORSMiddleware
+# -------------------------
 
 from config import settings
 from services.logger_config import setup_logging
@@ -18,25 +21,16 @@ logger = logging.getLogger(settings.LOGGER_NAME)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan manager"""
-    # --- Startup ---
     logger.info("Starting application...")
     
-    # Initialize database tables
     async with async_engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
     logger.info("Database initialized")
     
-    # Pre-initialize singleton services
-    # This ensures they're created once and reused
-    # The factory will handle the actual initialization
     logger.info("Services initialized")
-    
     yield
     
-    # --- Shutdown ---
     logger.info("Shutting down application...")
-    
-    # Clear cached service instances
     ServiceFactory.clear_instances()
     logger.info("Application shutdown complete")
 
@@ -46,8 +40,16 @@ app = FastAPI(
     lifespan=lifespan
 )
 
-# Mount static files
-app.mount("/static", StaticFiles(directory="static"), name="static")
+# --- ADD THIS CORS MIDDLEWARE SECTION ---
+# This allows your Flutter app (and any other client) to make requests to your API.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Allows all origins
+    allow_credentials=True,
+    allow_methods=["*"],  # Allows all methods (GET, POST, etc.)
+    allow_headers=["*"],  # Allows all headers
+)
+# ------------------------------------
 
 # Include API routes
 app.include_router(router)

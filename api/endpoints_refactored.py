@@ -206,15 +206,3 @@ async def clear_search_history(
             message="Search history cleared successfully"
         )
     raise HTTPException(status_code=500, detail="Failed to clear search history")
-
-@router.get("/", response_class=HTMLResponse, include_in_schema=False)
-async def serve_interface():
-    """Serve the web interface"""
-    try:
-        with open("static/index.html", "r", encoding="utf-8") as f:
-            return HTMLResponse(content=f.read())
-    except FileNotFoundError:
-        raise HTTPException(
-            status_code=404,
-            detail="Interface file not found"
-        )
