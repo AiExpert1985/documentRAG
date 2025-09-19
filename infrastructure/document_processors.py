@@ -130,14 +130,23 @@ class PDFProcessor(IDocumentProcessor):
         if file_type.lower() != 'pdf':
             raise ValueError(f"PDFProcessor cannot handle {file_type} files")
         
-        loader = UnstructuredPDFLoader(file_path, mode="elements", strategy="hi_res")
-        documents = await asyncio.to_thread(loader.load_and_split, self.text_splitter)
+        # --- FIX IS HERE ---
+        # Pass the configured languages to the loader
+        loader = UnstructuredPDFLoader(
+            file_path, 
+            mode="elements", 
+            strategy="hi_res",
+            languages=settings.OCR_LANGUAGES # CHANGED
+        )
+        documents = await asyncio.to_thread(loader.load)
         
         if not documents:
             raise ValueError("No content extracted from PDF")
         
+        split_docs = self.text_splitter.split_documents(documents)
+        
         chunks = []
-        for i, doc in enumerate(documents):
+        for i, doc in enumerate(split_docs):
             chunk_id = f"{uuid.uuid4()}_{i}"
             chunks.append(Chunk(
                 id=chunk_id,
