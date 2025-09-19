@@ -91,7 +91,8 @@ class IDocumentRepository(ABC):
     """Interface for document data access"""
     
     @abstractmethod
-    async def create(self, filename: str, file_hash: str) -> Document:
+    # CHANGED: The signature now includes 'document_id' and 'stored_filename'
+    async def create(self, document_id: str, filename: str, file_hash: str, stored_filename: str) -> Document:
         """Create new document record"""
         pass
     

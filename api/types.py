@@ -21,6 +21,7 @@ class SearchResult(BaseModel):
     page_number: int
     content_snippet: str
     document_id: str
+    download_url: HttpUrl # ADD THIS LINE
 
 class SearchResponse(BaseModel):
     status: str

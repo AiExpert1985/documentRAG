@@ -36,10 +36,11 @@ def validate_document_id(doc_id: str) -> bool:
 # API Endpoints
 @router.post("/search", response_model=SearchResponse)
 async def search_endpoint(
-    request: ChatRequest,
+    request: Request, # CHANGED: Added Request object
+    chat_request: ChatRequest, # CHANGED: Renamed original request body
     rag_service: IRAGService = Depends(get_rag_service)
 ) -> SearchResponse:
-    if not 3 <= len(request.question) <= 2000:
+    if not 3 <= len(chat_request.question) <= 2000:
         raise HTTPException(
             status_code=422,
             detail="Search query must be between 3 and 2000 characters"
@@ -52,8 +53,9 @@ async def search_endpoint(
             detail="Please upload a document first"
         )
     
-    results = await rag_service.search(request.question, top_k=5)
+    results = await rag_service.search(chat_request.question, top_k=5)
     
+    base_url = str(request.base_url)
     search_results = []
     for result in results:
         search_results.append({
@@ -64,12 +66,14 @@ async def search_endpoint(
                 if len(result.chunk.content) > 300 
                 else result.chunk.content
             ),
-            "document_id": result.chunk.document_id
+            "document_id": result.chunk.document_id,
+            # ADD THIS LINE:
+            "download_url": f"{base_url}download/{result.chunk.document_id}"
         })
     
     return SearchResponse(
         status="success",
-        query=request.question,
+        query=chat_request.question,
         results=search_results,
         total_results=len(search_results)
     )
@@ -160,6 +164,10 @@ async def list_documents(
     rag_service: IRAGService = Depends(get_rag_service)
 ) -> DocumentsListResponse:
     documents = await rag_service.list_documents(request)
+    
+    # DEBUG: Add this print statement
+    print(f"DEBUG: Found {len(documents)} documents to send to the client: {documents}")
+    
     return DocumentsListResponse(documents=documents)
 
 @router.get("/status", response_model=StatusResponse)

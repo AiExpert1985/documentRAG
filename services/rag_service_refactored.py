@@ -32,7 +32,7 @@ class RAGService(IRAGService):
 
     async def process_document(
         self, 
-        file: UploadFile, # CHANGED: Pass the whole file object
+        file: UploadFile,
         filename: str, 
         file_hash: str,
         processing_strategy: Optional[str] = None
@@ -40,26 +40,23 @@ class RAGService(IRAGService):
         if await self.document_repo.get_by_hash(file_hash):
             return {"status": "error", "error": "Document already exists"}
 
+        # CHANGED: The entire logic is simplified to remove the error
+        document_id = str(uuid4())
+        file_extension = Path(filename).suffix
+        stored_filename = f"{document_id}{file_extension}"
+        
         document = None
-        stored_filename = None
         try:
-            # 1. Create DB record to get a unique ID
-            # We pass a temporary stored_filename and update it later
-            temp_stored_name = f"temp_{uuid4()}"
-            document = await self.document_repo.create(filename, file_hash, temp_stored_name)
-            
-            # 2. Save the physical file using the unique ID
-            file_extension = Path(filename).suffix
-            stored_filename = f"{document.id}{file_extension}"
+            # 1. Save the physical file with its final, correct name
             file_path = await self.file_storage.save(file, stored_filename)
             
-            # This is a bit of a workaround for not having the ID before creation.
-            # In a real system, you might generate the ID first.
-            # For now, we update the record with the correct name.
-            document.metadata['stored_filename'] = stored_filename
-            # (This part requires updating the repository to support updates,
-            # for simplicity we will rely on the get_by_id to have the correct data later)
-            # A cleaner way is to generate UUID in the service, but let's stick to the repo generating it.
+            # 2. Create the DB record with the final, correct names
+            document = await self.document_repo.create(
+                document_id=document_id,
+                filename=filename,
+                file_hash=file_hash,
+                stored_filename=stored_filename
+            )
 
             # 3. Process the document for RAG
             file_type = Path(filename).suffix[1:].lower()
@@ -89,9 +86,12 @@ class RAGService(IRAGService):
             # Rollback: delete DB record and physical file
             if document and document.id:
                 await self.document_repo.delete(document.id)
-            if stored_filename:
-                await self.file_storage.delete(stored_filename)
+            
+            # Use the already known filename for deletion
+            await self.file_storage.delete(stored_filename)
+
             return {"status": "error", "error": str(e)}
+
 
     async def delete_document(self, document_id: str) -> bool:
         try:

@@ -15,10 +15,9 @@ class SQLDocumentRepository(IDocumentRepository):
     def __init__(self, session: AsyncSession):
         self.session = session
     
-    async def create(self, filename: str, file_hash: str, stored_filename: str) -> DomainDocument:
-        doc_id = str(uuid.uuid4())
+    async def create(self, document_id: str, filename: str, file_hash: str, stored_filename: str) -> DomainDocument:
         db_doc = DBDocument(
-            id=doc_id,
+            id=document_id,
             filename=filename,
             file_hash=file_hash,
             stored_filename=stored_filename
@@ -27,15 +26,7 @@ class SQLDocumentRepository(IDocumentRepository):
         await self.session.commit()
         await self.session.refresh(db_doc)
         
-        return DomainDocument(
-            id=db_doc.id,
-            filename=db_doc.filename,
-            file_hash=db_doc.file_hash,
-            metadata={
-                "timestamp": db_doc.timestamp.isoformat(),
-                "stored_filename": db_doc.stored_filename # Include in domain model
-            }
-        )
+        return self._to_domain(db_doc)
 
     
     def _to_domain(self, db_doc: DBDocument) -> Optional[DomainDocument]:
@@ -50,6 +41,8 @@ class SQLDocumentRepository(IDocumentRepository):
                 "stored_filename": db_doc.stored_filename
             }
         )
+    
+
 
     async def get_by_id(self, document_id: str) -> Optional[DomainDocument]:
         db_doc = await self.session.get(DBDocument, document_id)
