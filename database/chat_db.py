@@ -29,6 +29,9 @@ class Message(Base):
 class Document(Base):
     __tablename__ = "documents"
     id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
-    filename = Column(String, nullable=False)
+    filename = Column(String, nullable=False) # The original filename
     file_hash = Column(String, unique=True, index=True, nullable=False)
+    # CHANGED: Add a column to store the secure filename on disk
+    stored_filename = Column(String, nullable=False, unique=True)
     timestamp = Column(DateTime, default=datetime.utcnow)
+

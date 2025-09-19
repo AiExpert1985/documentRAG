@@ -1,41 +1,35 @@
 # api/endpoints_refactored.py
-"""Refactored API endpoints with proper service layer"""
 import os
-import tempfile
 import re
-from typing import AsyncGenerator, List, Dict, Optional
-from pathlib import Path
+from typing import List, Dict, Optional, AsyncGenerator # CHANGED: Import AsyncGenerator
 
 from fastapi import APIRouter, UploadFile, File, Form, HTTPException, Depends, Request
-from fastapi.responses import HTMLResponse
+from fastapi.responses import FileResponse
 from sqlalchemy.ext.asyncio import AsyncSession
-from werkzeug.utils import secure_filename
 
 from config import settings
 from core.interfaces import IRAGService
 from database.chat_db import AsyncSessionLocal
-from infrastructure.repositories import SQLMessageRepository
 from services.factory import ServiceFactory
 from api.types import (
-    ChatRequest, SearchResponse, UploadResponse, 
-    StatusResponse, DocumentsListResponse, DeleteResponse
+    SearchResponse, UploadResponse, StatusResponse, 
+    DocumentsListResponse, DeleteResponse, ChatRequest
 )
 from utils.helpers import get_file_hash
 
 router = APIRouter()
 
 # Dependency injection
+# CHANGED: Updated the return type hint to fix the Pylance error
 async def get_db() -> AsyncGenerator[AsyncSession, None]:
     async with AsyncSessionLocal() as session:
         yield session
 
 def get_rag_service(db: AsyncSession = Depends(get_db)) -> IRAGService:
-    """Get RAG service instance"""
     return ServiceFactory.create_rag_service(db)
 
 # Utility functions
 def validate_document_id(doc_id: str) -> bool:
-    """Validate document ID format"""
     uuid_pattern = r'^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$'
     return bool(re.match(uuid_pattern, doc_id, re.IGNORECASE))
 
@@ -45,7 +39,6 @@ async def search_endpoint(
     request: ChatRequest,
     rag_service: IRAGService = Depends(get_rag_service)
 ) -> SearchResponse:
-    """Search documents"""
     if not 3 <= len(request.question) <= 2000:
         raise HTTPException(
             status_code=422,
@@ -87,57 +80,52 @@ async def upload_pdf(
     processing_strategy: Optional[str] = Form(None),
     rag_service: IRAGService = Depends(get_rag_service)
 ) -> UploadResponse:
-    """
-    Upload and process a PDF.
-    
-    You can optionally specify a processing_strategy in the form data:
-    - **auto**: (Default) System tries to detect if OCR is needed.
-    - **unstructured**: Forces direct text extraction.
-    - **easyocr**: Forces OCR processing with EasyOCR.
-    - **paddleocr**: Forces OCR processing with PaddleOCR.
-    """
     if not file.filename or not file.filename.lower().endswith(('.pdf')):
         raise HTTPException(status_code=400, detail="Only PDF files are supported")
-    
-    safe_filename = secure_filename(file.filename)
     
     if file.size and file.size > settings.MAX_FILE_SIZE:
         raise HTTPException(status_code=413, detail=f"File too large. Max size: {settings.MAX_FILE_SIZE // 1024 // 1024}MB")
     
     file_content = await file.read()
     file_hash = get_file_hash(file_content)
+    await file.seek(0)
     
-    temp_path = None
-    try:
-        with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as temp_file:
-            temp_file.write(file_content)
-            temp_path = temp_file.name
-        
-        result = await rag_service.process_document(
-            temp_path,
-            safe_filename,
-            file_hash,
-            processing_strategy=processing_strategy
-        )
-        
-        if result["status"] == "success":
-            # Add a message field for the response model
-            result['message'] = f"Successfully processed '{result['filename']}'"
-            return UploadResponse(**result)
-        else:
-            status_code = 400 if "exists" in result.get("error", "") or "Unsupported" in result.get("error", "") else 500
-            raise HTTPException(status_code=status_code, detail=result.get("error", "Processing failed"))
-            
-    finally:
-        if temp_path and os.path.exists(temp_path):
-            os.unlink(temp_path)
+    result = await rag_service.process_document(
+        file, file.filename, file_hash, processing_strategy=processing_strategy
+    )
+    
+    if result["status"] == "success":
+        result['message'] = f"Successfully processed '{result['filename']}'"
+        return UploadResponse(**result)
+    else:
+        status_code = 400 if "exists" in result.get("error", "") else 500
+        raise HTTPException(status_code=status_code, detail=result.get("error", "Processing failed"))
+
+@router.get("/download/{document_id}")
+async def download_document(
+    document_id: str,
+    rag_service: IRAGService = Depends(get_rag_service)
+):
+    """Download the original document file."""
+    if not validate_document_id(document_id):
+        raise HTTPException(status_code=422, detail="Invalid document ID format")
+    
+    doc_details = await rag_service.get_document_with_path(document_id)
+    
+    if not doc_details or not os.path.exists(doc_details["path"]):
+        raise HTTPException(status_code=404, detail="File not found")
+
+    return FileResponse(
+        path=doc_details["path"],
+        filename=doc_details["original_filename"],
+        media_type='application/octet-stream'
+    )
 
 @router.delete("/documents/{document_id}", response_model=DeleteResponse)
 async def delete_document(
     document_id: str,
     rag_service: IRAGService = Depends(get_rag_service)
 ) -> DeleteResponse:
-    """Delete a document"""
     if not validate_document_id(document_id):
         raise HTTPException(
             status_code=422,
@@ -160,7 +148,6 @@ async def delete_document(
 async def clear_all_documents(
     rag_service: IRAGService = Depends(get_rag_service)
 ) -> DeleteResponse:
-    """Clear all documents"""
     await rag_service.clear_all()
     return DeleteResponse(
         status="success",
@@ -169,19 +156,16 @@ async def clear_all_documents(
 
 @router.get("/documents", response_model=DocumentsListResponse)
 async def list_documents(
+    request: Request,
     rag_service: IRAGService = Depends(get_rag_service)
 ) -> DocumentsListResponse:
-    """List all documents"""
-    documents = await rag_service.list_documents()
-    return DocumentsListResponse(
-        documents=[{"id": doc["id"], "filename": doc["filename"]} for doc in documents]
-    )
+    documents = await rag_service.list_documents(request)
+    return DocumentsListResponse(documents=documents)
 
 @router.get("/status", response_model=StatusResponse)
 async def get_status(
     rag_service: IRAGService = Depends(get_rag_service)
 ) -> StatusResponse:
-    """Get system status"""
     status = await rag_service.get_status()
     return StatusResponse(**status)
 
@@ -189,7 +173,7 @@ async def get_status(
 async def get_search_history(
     db: AsyncSession = Depends(get_db)
 ) -> List[Dict]:
-    """Get recent search history"""
+    from infrastructure.repositories import SQLMessageRepository
     message_repo = SQLMessageRepository(db)
     return await message_repo.get_search_history(limit=50)
 
@@ -197,7 +181,7 @@ async def get_search_history(
 async def clear_search_history(
     db: AsyncSession = Depends(get_db)
 ) -> DeleteResponse:
-    """Clear all search history"""
+    from infrastructure.repositories import SQLMessageRepository
     message_repo = SQLMessageRepository(db)
     success = await message_repo.clear_history()
     if success:

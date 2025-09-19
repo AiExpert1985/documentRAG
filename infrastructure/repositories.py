@@ -15,13 +15,13 @@ class SQLDocumentRepository(IDocumentRepository):
     def __init__(self, session: AsyncSession):
         self.session = session
     
-    async def create(self, filename: str, file_hash: str) -> DomainDocument:
-        """Create document record"""
+    async def create(self, filename: str, file_hash: str, stored_filename: str) -> DomainDocument:
         doc_id = str(uuid.uuid4())
         db_doc = DBDocument(
             id=doc_id,
             filename=filename,
-            file_hash=file_hash
+            file_hash=file_hash,
+            stored_filename=stored_filename
         )
         self.session.add(db_doc)
         await self.session.commit()
@@ -31,55 +31,43 @@ class SQLDocumentRepository(IDocumentRepository):
             id=db_doc.id,
             filename=db_doc.filename,
             file_hash=db_doc.file_hash,
-            metadata={"timestamp": db_doc.timestamp.isoformat()}
+            metadata={
+                "timestamp": db_doc.timestamp.isoformat(),
+                "stored_filename": db_doc.stored_filename # Include in domain model
+            }
         )
+
     
-    async def get_by_id(self, document_id: str) -> Optional[DomainDocument]:
-        """Get document by ID"""
-        db_doc = await self.session.get(DBDocument, document_id)
+    def _to_domain(self, db_doc: DBDocument) -> Optional[DomainDocument]:
         if not db_doc:
             return None
-        
         return DomainDocument(
             id=db_doc.id,
             filename=db_doc.filename,
             file_hash=db_doc.file_hash,
-            metadata={"timestamp": db_doc.timestamp.isoformat()}
+            metadata={
+                "timestamp": db_doc.timestamp.isoformat(),
+                "stored_filename": db_doc.stored_filename
+            }
         )
-    
+
+    async def get_by_id(self, document_id: str) -> Optional[DomainDocument]:
+        db_doc = await self.session.get(DBDocument, document_id)
+        return self._to_domain(db_doc)
+
     async def get_by_hash(self, file_hash: str) -> Optional[DomainDocument]:
-        """Check if document exists by hash"""
         result = await self.session.execute(
             select(DBDocument).where(DBDocument.file_hash == file_hash)
         )
         db_doc = result.scalar_one_or_none()
-        
-        if not db_doc:
-            return None
-        
-        return DomainDocument(
-            id=db_doc.id,
-            filename=db_doc.filename,
-            file_hash=db_doc.file_hash,
-            metadata={"timestamp": db_doc.timestamp.isoformat()}
-        )
-    
+        return self._to_domain(db_doc)
+
     async def list_all(self) -> List[DomainDocument]:
-        """List all documents"""
         result = await self.session.execute(
             select(DBDocument).order_by(DBDocument.timestamp.desc())
         )
         docs = result.scalars().all()
-        
-        return [
-            DomainDocument(
-                id=doc.id,
-                filename=doc.filename,
-                file_hash=doc.file_hash,
-                metadata={"timestamp": doc.timestamp.isoformat()}
-            )
-            for doc in docs
-        ]
+        return [self._to_domain(doc) for doc in docs]
     
     async def delete(self, document_id: str) -> bool:
         """Delete document"""

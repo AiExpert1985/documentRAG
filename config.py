@@ -3,6 +3,7 @@
 from typing import List
 from pydantic_settings import BaseSettings
 from utils.paths import get_log_file_path
+from utils.paths import get_project_root
 
 class Settings(BaseSettings):
     """Application configuration"""
@@ -25,6 +26,7 @@ class Settings(BaseSettings):
     CHUNK_SIZE: int = 1000
     CHUNK_OVERLAP: int = 200
     MAX_FILE_SIZE: int = 50 * 1024 * 1024  # 50MB
+    UPLOADS_DIR: str = f"{get_project_root()}/uploads"
     
     # OCR Configuration
     DEFAULT_OCR_STRATEGY: str = "unstructured"

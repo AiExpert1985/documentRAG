@@ -1,6 +1,8 @@
 # api/types.py
 from pydantic import BaseModel
 from typing import Optional, List, Dict
+from pydantic import BaseModel, HttpUrl
+
 
 class Message(BaseModel):
     sender: str
@@ -9,6 +11,7 @@ class Message(BaseModel):
 class DocumentsListItem(BaseModel):
     id: str
     filename: str
+    download_url: HttpUrl # CHANGED
 
 class ChatRequest(BaseModel):
     question: str

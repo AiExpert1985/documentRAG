@@ -3,6 +3,7 @@
 from abc import ABC, abstractmethod
 from typing import List, Dict, Any, Optional
 from dataclasses import dataclass
+from fastapi import UploadFile, Request 
 
 @dataclass
 class Document:
@@ -137,14 +138,35 @@ class IMessageRepository(ABC):
         """Clear search history"""
         pass
 
+
+# ============= File Storage Interface =============
+class IFileStorage(ABC):
+    """Interface for physical file storage operations"""
+
+    @abstractmethod
+    async def save(self, file: UploadFile, filename: str) -> str:
+        """Save an uploaded file and return its stored name."""
+        pass
+
+    @abstractmethod
+    async def get_path(self, filename: str) -> Optional[str]:
+        """Get the full path to a stored file."""
+        pass
+
+    @abstractmethod
+    async def delete(self, filename: str) -> bool:
+        """Delete a stored file."""
+        pass
+
 # ============= Service Layer Interfaces =============
 class IRAGService(ABC):
     """High-level RAG operations interface"""
     
     @abstractmethod
-    async def process_document(self, file_path: str, filename: str, file_hash: str) -> Dict[str, Any]:
-        """Process and store a document"""
+    async def process_document(self, file: UploadFile, filename: str, file_hash: str, processing_strategy: Optional[str]) -> Dict[str, Any]:
+        """Process and store a document from an UploadFile object."""
         pass
+
     
     @abstractmethod
     async def search(self, query: str, top_k: int = 5) -> List[SearchResult]:
@@ -163,13 +185,13 @@ class IRAGService(ABC):
         pass
         
     @abstractmethod
-    async def list_documents(self) -> List[Dict[str, str]]:
-        """List all documents"""
+    async def list_documents(self, request: Request) -> List[Dict[str, str]]: # CHANGED
+        """List all documents, including download URLs."""
         pass
         
     @abstractmethod
-    async def get_status(self) -> Dict[str, Any]:
-        """Get system status"""
+    async def get_document_with_path(self, document_id: str) -> Optional[Dict[str, Any]]: # CHANGED
+        """Get a document's details and its physical file path."""
         pass
 
 
