@@ -22,7 +22,8 @@ logger = logging.getLogger(settings.LOGGER_NAME)
 async def lifespan(app: FastAPI):
     """Application lifespan manager"""
     logger.info("Starting application...")
-    
+
+    #✅
     async with async_engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
     logger.info("Database initialized")

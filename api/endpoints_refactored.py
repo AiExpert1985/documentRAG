@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from config import settings
 from core.interfaces import IRAGService
 from database.chat_db import AsyncSessionLocal
-from services.factory import ServiceFactory
+from services.factory import get_rag_service
 from api.types import (
     SearchResponse, UploadResponse, StatusResponse, 
     DocumentsListResponse, DeleteResponse, ChatRequest
@@ -25,8 +25,8 @@ async def get_db() -> AsyncGenerator[AsyncSession, None]:
     async with AsyncSessionLocal() as session:
         yield session
 
-def get_rag_service(db: AsyncSession = Depends(get_db)) -> IRAGService:
-    return ServiceFactory.create_rag_service(db)
+# def get_rag_service(db: AsyncSession = Depends(get_db)) -> IRAGService:
+#     return ServiceFactory.create_rag_service(db)
 
 # Utility functions
 def validate_document_id(doc_id: str) -> bool:
@@ -78,21 +78,28 @@ async def search_endpoint(
         total_results=len(search_results)
     )
 
+
+# Hamandi
 @router.post("/upload-pdf", response_model=UploadResponse)
 async def upload_pdf(
     file: UploadFile = File(...),
+    #TODO: Remove processing_strategy because user shouldn't decide it. 
+    #TODO: I believe it should be specified in the server config (based on study)
     processing_strategy: Optional[str] = Form(None),
     rag_service: IRAGService = Depends(get_rag_service)
 ) -> UploadResponse:
+    # TODO: My app allows images and word documents, not only PDF files
     if not file.filename or not file.filename.lower().endswith(('.pdf')):
         raise HTTPException(status_code=400, detail="Only PDF files are supported")
     
+    # TODO: what is the best limit ?
+    # TODO: wouldn't it be better to make intiial check in client to spare network resources ? (keep this too)
     if file.size and file.size > settings.MAX_FILE_SIZE:
         raise HTTPException(status_code=413, detail=f"File too large. Max size: {settings.MAX_FILE_SIZE // 1024 // 1024}MB")
     
-    file_content = await file.read()
+    file_content = await file.read()  # Pointer moves to END
     file_hash = get_file_hash(file_content)
-    await file.seek(0)
+    await file.seek(0)  # Reset pointer back to START
     
     result = await rag_service.process_document(
         file, file.filename, file_hash, processing_strategy=processing_strategy
