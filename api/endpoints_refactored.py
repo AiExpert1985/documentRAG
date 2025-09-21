@@ -67,30 +67,33 @@ async def search_endpoint(
     )
 
 
-# Hamandi
-@router.post("/upload-pdf", response_model=UploadResponse)
-async def upload_pdf(
+@router.post("/upload-document", response_model=UploadResponse) 
+async def upload_document(  
     file: UploadFile = File(...),
-    #TODO: Remove processing_strategy because user shouldn't decide it. 
-    #TODO: I believe it should be specified in the server config (based on study)
-    processing_strategy: Optional[str] = Form(None),
     rag_service: IRAGService = Depends(get_rag_service)
 ) -> UploadResponse:
-    # TODO: My app allows images and word documents, not only PDF files
-    if not file.filename or not file.filename.lower().endswith(('.pdf')):
-        raise HTTPException(status_code=400, detail="Only PDF files are supported")
+    if not file.filename:
+        raise HTTPException(status_code=400, detail="No filename provided")
     
-    # TODO: what is the best limit ?
-    # TODO: wouldn't it be better to make intiial check in client to spare network resources ? (keep this too)
+    file_extension = file.filename.lower().split('.')[-1]
+    if file_extension not in settings.ALLOWED_FILE_EXTENSIONS:
+        raise HTTPException(
+            status_code=400, 
+            detail=f"Unsupported file type. Allowed: {', '.join(settings.ALLOWED_FILE_EXTENSIONS)}"
+        )
+    
     if file.size and file.size > settings.MAX_FILE_SIZE:
-        raise HTTPException(status_code=413, detail=f"File too large. Max size: {settings.MAX_FILE_SIZE // 1024 // 1024}MB")
+        raise HTTPException(
+            status_code=413, 
+            detail=f"File too large. Max size: {settings.MAX_FILE_SIZE // 1024 // 1024}MB"
+        )
     
-    file_content = await file.read()  # Pointer moves to END
+    file_content = await file.read()
     file_hash = get_file_hash(file_content)
-    await file.seek(0)  # Reset pointer back to START
+    await file.seek(0)
     
     result = await rag_service.process_document(
-        file, file.filename, file_hash, processing_strategy=processing_strategy
+        file, file.filename, file_hash
     )
     
     if result["status"] == "success":

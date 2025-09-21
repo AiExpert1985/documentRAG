@@ -164,7 +164,7 @@ class IRAGService(ABC):
     """High-level RAG operations interface"""
     
     @abstractmethod
-    async def process_document(self, file: UploadFile, filename: str, file_hash: str, processing_strategy: Optional[str]) -> Dict[str, Any]:
+    async def process_document(self, file: UploadFile, filename: str, file_hash: str) -> Dict[str, Any]:
         """Process and store a document from an UploadFile object."""
         pass
 

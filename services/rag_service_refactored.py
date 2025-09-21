@@ -36,7 +36,6 @@ class RAGService(IRAGService):
         file: UploadFile,
         filename: str, 
         file_hash: str,
-        processing_strategy: Optional[str] = None
     ) -> Dict[str, Any]:
         if await self.document_repo.get_by_hash(file_hash):
             return {"status": "error", "error": "Document already exists"}
@@ -55,7 +54,7 @@ class RAGService(IRAGService):
                 stored_filename=stored_filename
             )
             file_type = Path(filename).suffix[1:].lower()
-            processor = self.doc_processor_factory.get_processor(file_type, processing_strategy)
+            processor = self.doc_processor_factory.get_processor(file_type)
             
             chunks = await processor.process(file_path, file_type)
             if not chunks:

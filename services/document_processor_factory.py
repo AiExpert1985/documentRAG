@@ -21,33 +21,39 @@ class DocumentProcessorFactory:
         }
         self.pdf_converter = PyMuPDFConverter()
     
+    
+    
     def get_processor(
         self, 
         file_type: str, 
-        strategy: Optional[str] = None
     ) -> IDocumentProcessor:
-        """Get appropriate processor based on file type and strategy."""
+        """Get appropriate processor based on file type."""
         file_type = file_type.lower()
         
         if file_type == "pdf":
-            return self._get_pdf_processor(strategy)
-        # Future: elif file_type == "docx": ...
+            return self._get_pdf_processor()  # No strategy parameter
+        # Future: elif file_type in ["jpg", "jpeg", "png"]: ...
+        # Future: elif file_type in ["docx", "doc"]: ...
         else:
             raise ValueError(f"Unsupported file type: {file_type}")
-    
-    def _get_pdf_processor(self, strategy: Optional[str]) -> IDocumentProcessor:
-        """Get PDF processor with strategy selection"""
-        final_strategy = strategy or settings.DEFAULT_OCR_STRATEGY
+
+    def _get_pdf_processor(self) -> IDocumentProcessor:
+        """Get PDF processor using auto-detection or config."""
+        if settings.AUTO_DETECT_STRATEGY:
+            # Use auto-detection (you'd need file path for this)
+            strategy = settings.DEFAULT_OCR_STRATEGY  # Fallback for now
+        else:
+            strategy = settings.DEFAULT_OCR_STRATEGY
         
-        processor_class = self._pdf_strategies.get(final_strategy.lower())
+        processor_class = self._pdf_strategies.get(strategy.lower())
         if not processor_class:
             available = ", ".join(self._pdf_strategies.keys())
             raise ValueError(
-                f"Unknown PDF processing strategy: '{final_strategy}'. "
+                f"Unknown PDF processing strategy: '{strategy}'. "
                 f"Available: {available}"
             )
         
-        if final_strategy.lower() in ["easyocr", "paddleocr"]:
+        if strategy.lower() in ["easyocr", "paddleocr"]:
             return processor_class(pdf_converter=self.pdf_converter)
         else:
             return processor_class()
