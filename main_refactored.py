@@ -10,9 +10,8 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from config import settings
 from services.logger_config import setup_logging
-from database.chat_db import Base, async_engine
+from database.database import Base, async_engine
 from api.endpoints_refactored import router
-from services.factory import ServiceFactory
 
 # Setup logging
 setup_logging()
@@ -31,8 +30,6 @@ async def lifespan(app: FastAPI):
     logger.info("Services initialized")
     yield
     
-    logger.info("Shutting down application...")
-    ServiceFactory.clear_instances()
     logger.info("Application shutdown complete")
 
 # Create FastAPI app

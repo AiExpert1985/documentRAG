@@ -1,37 +1,25 @@
 # api/endpoints_refactored.py
 import os
-import re
 from typing import List, Dict, Optional, AsyncGenerator # CHANGED: Import AsyncGenerator
 
 from fastapi import APIRouter, UploadFile, File, Form, HTTPException, Depends, Request
 from fastapi.responses import FileResponse
 from sqlalchemy.ext.asyncio import AsyncSession
+from database.dependencies import get_db
 
 from config import settings
 from core.interfaces import IRAGService
-from database.chat_db import AsyncSessionLocal
+from database.database import AsyncSessionLocal
 from services.factory import get_rag_service
 from api.types import (
     SearchResponse, UploadResponse, StatusResponse, 
     DocumentsListResponse, DeleteResponse, ChatRequest
 )
-from utils.helpers import get_file_hash
+from utils.helpers import get_file_hash, validate_document_id
+
 
 router = APIRouter()
 
-# Dependency injection
-# CHANGED: Updated the return type hint to fix the Pylance error
-async def get_db() -> AsyncGenerator[AsyncSession, None]:
-    async with AsyncSessionLocal() as session:
-        yield session
-
-# def get_rag_service(db: AsyncSession = Depends(get_db)) -> IRAGService:
-#     return ServiceFactory.create_rag_service(db)
-
-# Utility functions
-def validate_document_id(doc_id: str) -> bool:
-    uuid_pattern = r'^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$'
-    return bool(re.match(uuid_pattern, doc_id, re.IGNORECASE))
 
 # API Endpoints
 @router.post("/search", response_model=SearchResponse)

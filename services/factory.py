@@ -4,7 +4,7 @@ import chromadb
 from sqlalchemy.ext.asyncio import AsyncSession
 from fastapi import Depends
 
-from api.endpoints_refactored import get_db
+from database.dependencies import get_db
 from config import settings
 from core.interfaces import (
     IRAGService, IVectorStore, IEmbeddingService, 
@@ -54,7 +54,6 @@ def get_message_repository(session: AsyncSession = Depends(get_db)) -> IMessageR
 
 # Main service provider using FastAPI DI
 def get_rag_service(
-    session: AsyncSession = Depends(get_db),
     vector_store: IVectorStore = Depends(get_vector_store),
     embedding_service: IEmbeddingService = Depends(get_embedding_service),
     file_storage: IFileStorage = Depends(get_file_storage),

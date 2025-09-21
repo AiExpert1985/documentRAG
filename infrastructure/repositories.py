@@ -7,7 +7,7 @@ from sqlalchemy import select, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.interfaces import IDocumentRepository, IMessageRepository, Document as DomainDocument
-from database.chat_db import Document as DBDocument, Message
+from database.database import Document as DBDocument, Message
 
 class SQLDocumentRepository(IDocumentRepository):
     """SQLAlchemy document repository"""

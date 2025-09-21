@@ -1,14 +1,11 @@
 # database/chat_db.py
-# TODO: change the filename to other descriptive, for example "database.py"
 
 import logging
 import uuid
 from datetime import datetime
 
 from sqlalchemy import Column, DateTime, Integer, String, select
-# TODO: remove unused AsyncSession import
-from sqlalchemy.ext.asyncio import (AsyncSession, async_sessionmaker,
-                                    create_async_engine)
+from sqlalchemy.ext.asyncio import (async_sessionmaker, create_async_engine)
 from sqlalchemy.orm import declarative_base
 
 from config import settings
