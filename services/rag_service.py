@@ -34,13 +34,13 @@ class RAGService(IRAGService):
     async def process_document(
         self, 
         file: UploadFile,
-        filename: str, 
         file_hash: str,
     ) -> Dict[str, Any]:
         if await self.document_repo.get_by_hash(file_hash):
             return {"status": "error", "error": "Document already exists"}
 
         document_id = str(uuid4())
+        filename = file.filename
         file_extension = Path(filename).suffix
         stored_filename = f"{document_id}{file_extension}"
         

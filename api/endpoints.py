@@ -92,9 +92,7 @@ async def upload_document(
     file_hash = get_file_hash(file_content)
     await file.seek(0)
     
-    result = await rag_service.process_document(
-        file, file.filename, file_hash
-    )
+    result = await rag_service.process_document(file, file_hash)
     
     if result["status"] == "success":
         result['message'] = f"Successfully processed '{result['filename']}'"

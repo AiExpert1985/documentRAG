@@ -14,7 +14,7 @@ from infrastructure.vector_stores import ChromaDBVectorStore
 from infrastructure.embedding_services import SentenceTransformerEmbedding
 from infrastructure.repositories import SQLDocumentRepository, SQLMessageRepository
 from infrastructure.file_storage import LocalFileStorage
-from services.rag_service_refactored import RAGService
+from services.rag_service import RAGService
 from services.document_processor_factory import DocumentProcessorFactory
 
 # Provider functions for each component

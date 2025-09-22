@@ -11,7 +11,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from config import settings
 from services.logger_config import setup_logging
 from database.database import Base, async_engine
-from api.endpoints_refactored import router
+from api.endpoints import router
 
 # Setup logging
 setup_logging()
