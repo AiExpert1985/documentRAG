@@ -3,7 +3,9 @@
 from abc import ABC, abstractmethod
 from typing import List, Dict, Any, Optional
 from dataclasses import dataclass
-from fastapi import UploadFile, Request 
+from fastapi import UploadFile, Request
+
+from api.types import ProcessDocumentResponse 
 
 @dataclass
 class Document:
@@ -164,7 +166,7 @@ class IRAGService(ABC):
     """High-level RAG operations interface"""
     
     @abstractmethod
-    async def process_document(self, file: UploadFile, file_hash: str) -> Dict[str, Any]:
+    async def process_document(self, file: UploadFile) -> ProcessDocumentResponse:
         """Process and store a document from an UploadFile object."""
         pass
 

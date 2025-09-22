@@ -16,7 +16,6 @@ from utils.helpers import get_file_hash, validate_uploaded_file
 logger = logging.getLogger(__name__)
 
 class RAGService(IRAGService):
-    # ... (__init__ and process_document are unchanged) ...
     def __init__(
         self,
         vector_store: IVectorStore,
