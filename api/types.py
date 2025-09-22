@@ -29,12 +29,14 @@ class SearchResponse(BaseModel):
     results: List[SearchResult]
     total_results: int
 
-class UploadResponse(BaseModel):
+class ProcessDocumentResponse(BaseModel):
     status: str
     filename: str
-    pages: int
+    document_id: str
     chunks: int
-    message: str
+    pages: int
+    message: Optional[str] = None
+    error: Optional[str] = None
 
 class StatusResponse(BaseModel):
     document_loaded: Optional[str] = None

@@ -1,21 +1,20 @@
 # api/endpoints_refactored.py
 import os
-from typing import List, Dict, Optional, AsyncGenerator # CHANGED: Import AsyncGenerator
+from typing import List, Dict
 
-from fastapi import APIRouter, UploadFile, File, Form, HTTPException, Depends, Request
+from fastapi import APIRouter, UploadFile, File, HTTPException, Depends, Request
 from fastapi.responses import FileResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from database.dependencies import get_db
 
 from config import settings
 from core.interfaces import IRAGService
-from database.database import AsyncSessionLocal
 from services.factory import get_rag_service
 from api.types import (
-    SearchResponse, UploadResponse, StatusResponse, 
+    ProcessDocumentResponse, SearchResponse, StatusResponse, 
     DocumentsListResponse, DeleteResponse, ChatRequest
 )
-from utils.helpers import get_file_hash, validate_document_id
+from utils.helpers import validate_document_id
 
 
 router = APIRouter()
@@ -67,39 +66,12 @@ async def search_endpoint(
     )
 
 
-@router.post("/upload-document", response_model=UploadResponse) 
-async def upload_document(  
+@router.post("/upload-document", response_model=ProcessDocumentResponse)
+async def upload_document(
     file: UploadFile = File(...),
     rag_service: IRAGService = Depends(get_rag_service)
-) -> UploadResponse:
-    if not file.filename:
-        raise HTTPException(status_code=400, detail="No filename provided")
-    
-    file_extension = file.filename.lower().split('.')[-1]
-    if file_extension not in settings.ALLOWED_FILE_EXTENSIONS:
-        raise HTTPException(
-            status_code=400, 
-            detail=f"Unsupported file type. Allowed: {', '.join(settings.ALLOWED_FILE_EXTENSIONS)}"
-        )
-    
-    if file.size and file.size > settings.MAX_FILE_SIZE:
-        raise HTTPException(
-            status_code=413, 
-            detail=f"File too large. Max size: {settings.MAX_FILE_SIZE // 1024 // 1024}MB"
-        )
-    
-    file_content = await file.read()
-    file_hash = get_file_hash(file_content)
-    await file.seek(0)
-    
-    result = await rag_service.process_document(file, file_hash)
-    
-    if result["status"] == "success":
-        result['message'] = f"Successfully processed '{result['filename']}'"
-        return UploadResponse(**result)
-    else:
-        status_code = 400 if "exists" in result.get("error", "") else 500
-        raise HTTPException(status_code=status_code, detail=result.get("error", "Processing failed"))
+) -> ProcessDocumentResponse:
+    return await rag_service.process_document(file) 
 
 @router.get("/download/{document_id}")
 async def download_document(
