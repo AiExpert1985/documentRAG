@@ -1,4 +1,4 @@
-# services/rag_service.py
+# services/rag_service_imp.py
 import logging
 from typing import List, Dict, Any, Optional, Tuple
 from pathlib import Path
@@ -32,49 +32,55 @@ class RAGService(IRAGService):
         self.document_repo = document_repo
         self.message_repo = message_repo
 
-
     async def _prepare_file(self, file: UploadFile) -> Tuple[str, str, str]:
-        """Validate and prepare file for processing."""
         validate_uploaded_file(file)
         content = await file.read()
-        file_hash = get_file_hash(content)
         await file.seek(0)
         
         doc_id = str(uuid4())
-        stored_name = f"{doc_id}{Path(file.filename).suffix}"
-        return file_hash, doc_id, stored_name
+        return get_file_hash(content), doc_id, f"{doc_id}{Path(file.filename).suffix}"
 
     async def _process_chunks(self, file_path: str, file_type: str, document) -> List[Chunk]:
-        """Process document and generate embeddings."""
         processor = self.doc_processor_factory.get_processor(file_type)
         chunks = await processor.process(file_path, file_type)
         
         if not chunks:
             raise ValueError("No content extracted")
 
+        # Set document info and generate embeddings
         for chunk in chunks:
             chunk.document_id = document.id
-            chunk.metadata.update({
-                "document_id": document.id,
-                "document_name": document.filename
-            })
+            chunk.metadata.update({"document_id": document.id, "document_name": document.filename})
         
         texts = [chunk.content for chunk in chunks]
         embeddings = await self.embedding_service.generate_embeddings(texts)
+        
         for chunk, embedding in zip(chunks, embeddings):
             chunk.embedding = embedding
         
         return chunks
 
     async def _cleanup(self, document, stored_filename: str):
-        """Clean up on failure."""
-        if document:
-            await self.document_repo.delete(document.id)
-        await self.file_storage.delete(stored_filename)
+        """Clean up on failure - continue even if some operations fail"""
+        if document and document.id:
+            try: await self.vector_store.delete_by_document(document.id)
+            except Exception as e: logger.warning(f"Vector cleanup failed: {e}")
+            
+            try: await self.document_repo.delete(document.id)
+            except Exception as e: logger.warning(f"DB cleanup failed: {e}")
+        
+        if stored_filename:
+            try: await self.file_storage.delete(stored_filename)
+            except Exception as e: logger.warning(f"File cleanup failed: {e}")
 
     async def process_document(self, file: UploadFile) -> ProcessDocumentResponse:
-        """Process uploaded document."""
-        file_hash, doc_id, stored_name = await self._prepare_file(file)
+        try:
+            file_hash, doc_id, stored_name = await self._prepare_file(file)
+        except Exception as e:
+            return ProcessDocumentResponse(
+                status="error", filename=file.filename, document_id="",
+                chunks=0, pages=0, error=f"File preparation failed: {str(e)}"
+            )
         
         if await self.document_repo.get_by_hash(file_hash):
             return ProcessDocumentResponse(
@@ -89,7 +95,9 @@ class RAGService(IRAGService):
             
             file_type = Path(file.filename).suffix[1:].lower()
             chunks = await self._process_chunks(file_path, file_type, document)
-            await self.vector_store.add_chunks(chunks)
+            
+            if not await self.vector_store.add_chunks(chunks):
+                raise Exception("Failed to store vectors")
             
             return ProcessDocumentResponse(
                 status="success", filename=file.filename, document_id=document.id,
@@ -104,41 +112,53 @@ class RAGService(IRAGService):
                 chunks=0, pages=0, error=str(e)
             )
 
-    # --- METHOD WITH THE FIX ---
     async def search(self, query: str, top_k: int = 5) -> List[SearchResult]:
         try:
             query_embedding = await self.embedding_service.generate_query_embedding(query)
             results = await self.vector_store.search(query_embedding, top_k)
             await self.message_repo.save_search(query, len(results))
             
-            # CHANGED: Add data integrity check to filter out stale results
+            # Filter stale results
             valid_results = []
             for result in results:
-                # Check if the document referenced by the chunk still exists
                 if await self.document_repo.get_by_id(result.chunk.document_id):
                     valid_results.append(result)
-                else:
-                    logger.warning(f"Filtered stale search result for deleted document_id: {result.chunk.document_id}")
-
-            return valid_results
             
+            return valid_results
         except Exception as e:
             logger.error(f"Search failed: {e}")
             return []
 
-    # ... (the rest of the file is unchanged) ...
     async def delete_document(self, document_id: str) -> bool:
         try:
             document = await self.document_repo.get_by_id(document_id)
-            if not document: return False
+            if not document:
+                return False
+            
+            # Delete in reverse order - vectors, file, then DB record
             stored_filename = document.metadata.get("stored_filename")
+            
+            success = True
             if stored_filename:
-                await self.file_storage.delete(stored_filename)
-            await self.vector_store.delete_by_document(document_id)
-            await self.document_repo.delete(document_id)
-            return True
+                try: await self.file_storage.delete(stored_filename)
+                except Exception as e: 
+                    logger.warning(f"File deletion failed: {e}")
+                    success = False
+            
+            try: await self.vector_store.delete_by_document(document_id)
+            except Exception as e: 
+                logger.warning(f"Vector deletion failed: {e}")
+                success = False
+            
+            try: await self.document_repo.delete(document_id)
+            except Exception as e: 
+                logger.error(f"DB deletion failed: {e}")
+                return False  # This is critical
+            
+            return True  # DB record gone = success even if other cleanups failed
+            
         except Exception as e:
-            logger.error(f"Document deletion failed for ID {document_id}: {e}")
+            logger.error(f"Document deletion failed: {e}")
             return False
             
     async def list_documents(self, request: Request) -> List[Dict[str, str]]:
@@ -160,28 +180,24 @@ class RAGService(IRAGService):
             return None
             
         file_path = await self.file_storage.get_path(stored_filename)
-        if not file_path:
-            return None
-            
         return {
             "original_filename": document.filename,
             "path": file_path
-        }
+        } if file_path else None
     
     async def clear_all(self) -> bool:
         try:
-            # First, get all document records to find their physical filenames
             documents = await self.document_repo.list_all()
+            
+            # Delete physical files
             for doc in documents:
                 stored_filename = doc.metadata.get("stored_filename")
                 if stored_filename:
                     await self.file_storage.delete(stored_filename)
             
-            # Then, clear the vector store and the database table
-            vector_cleared = await self.vector_store.clear()
-            db_cleared = await self.document_repo.delete_all()
-            
-            return vector_cleared and db_cleared
+            # Clear vector store and database
+            return (await self.vector_store.clear() and 
+                    await self.document_repo.delete_all())
         except Exception as e:
             logger.error(f"Clear all failed: {e}")
             return False
