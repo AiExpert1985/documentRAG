@@ -1,4 +1,4 @@
-# api/endpoints_refactored.py
+# api/endpoints.py
 import os
 from typing import List, Dict
 
@@ -149,7 +149,7 @@ async def get_status(
 async def get_search_history(
     db: AsyncSession = Depends(get_db)
 ) -> List[Dict]:
-    from infrastructure.repositories import SQLMessageRepository
+    from infrastructure.repositories_imp import SQLMessageRepository
     message_repo = SQLMessageRepository(db)
     return await message_repo.get_search_history(limit=50)
 
@@ -157,7 +157,7 @@ async def get_search_history(
 async def clear_search_history(
     db: AsyncSession = Depends(get_db)
 ) -> DeleteResponse:
-    from infrastructure.repositories import SQLMessageRepository
+    from infrastructure.repositories_imp import SQLMessageRepository
     message_repo = SQLMessageRepository(db)
     success = await message_repo.clear_history()
     if success:

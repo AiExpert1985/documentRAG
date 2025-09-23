@@ -1,4 +1,4 @@
-# database/chat_db.py
+# database/database.py
 
 import logging
 import uuid

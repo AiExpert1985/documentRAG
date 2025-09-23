@@ -28,15 +28,16 @@ class Settings(BaseSettings):
     MAX_FILE_SIZE: int = 50 * 1024 * 1024  # 50MB
     UPLOADS_DIR: str = f"{get_project_root()}/uploads"
     
-    # Document processing strategy configuration
-    DEFAULT_OCR_STRATEGY: str = "unstructured"
-    PREFERRED_OCR_ENGINE: str = "easyocr"
-    AUTO_DETECT_STRATEGY: bool = True  # Let system choose best method
+    # PDF processing method selection
+    PDF_PROCESSING_METHOD: str = "ocr"  # or "text_extraction" in future
+    OCR_ENGINE: str = "easyocr"        # Only used when method is "ocr"
+    
+    # OCR settings (only used when PDF_PROCESSING_METHOD = "ocr")
     OCR_DPI: int = 300
     OCR_LANGUAGES: List[str] = ["ar", "en"]
-
-    # File type support
-    ALLOWED_FILE_EXTENSIONS: List[str] = ["pdf", "jpg", "jpeg", "png", "docx", "doc", "txt"]
+    
+    # File support
+    ALLOWED_FILE_EXTENSIONS: List[str] = ["pdf", "jpg", "jpeg", "png"]
 
     # API settings
     REQUEST_TIMEOUT: int = 60

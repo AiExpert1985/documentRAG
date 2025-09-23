@@ -1,25 +1,14 @@
-# requirements.txt
-
-# --- Core Web Framework ---
 fastapi
-uvicorn[standard]
 pydantic-settings
-
-# --- Database ---
-sqlalchemy[asyncio]
+sqlalchemy
 aiosqlite
-
-# --- AI / RAG Components ---
-langchain
-langchain-community
-pypdf
-
-# --- Vector Store & Embeddings ---
-chromadb-client
+chromadb
 sentence-transformers
-
-# --- LLM Service Communication ---
-requests
-
-# --- Utilities ---
-Werkzeug
+langchain
+langchain_community
+python-multipart
+easyocr
+paddleocr
+PyMuPDF
+pillow
+uvicorn

@@ -6,38 +6,34 @@ from typing import List
 from PIL import Image
 import io
 
+from PIL import Image
+
 from langchain.text_splitter import RecursiveCharacterTextSplitter
-from langchain_community.document_loaders import UnstructuredPDFLoader
 from langchain_core.documents import Document as LangchainDocument
 
 from core.interfaces import IDocumentProcessor, Chunk, IPdfToImageConverter
-from .pdf_converters import PyMuPDFConverter
 from config import settings
 
 class BaseOCRProcessor(IDocumentProcessor):
-    """Abstract base class for OCR processors that work on images."""
-    
-    def __init__(
-        self, 
-        pdf_converter: IPdfToImageConverter,
-        chunk_size: int = 1000, 
-        chunk_overlap: int = 200
-    ):
-        self.pdf_converter = pdf_converter
+    def __init__(self, pdf_converter: IPdfToImageConverter = None, chunk_size: int = 1000, chunk_overlap: int = 200):
+        self.pdf_converter = pdf_converter  # None for image-only processors
         self.text_splitter = RecursiveCharacterTextSplitter(
             chunk_size=chunk_size,
             chunk_overlap=chunk_overlap
         )
 
-    async def _extract_text_from_image(self, image: Image.Image) -> str:
-        raise NotImplementedError("Subclasses must implement this method.")
-
     async def process(self, file_path: str, file_type: str) -> List[Chunk]:
-        if file_type.lower() != 'pdf':
-            raise ValueError(f"This processor only handles PDF files for OCR, not {file_type}")
-
-        images = await asyncio.to_thread(self.pdf_converter.convert, file_path, dpi=settings.OCR_DPI)
+        # Get images based on file type
+        if file_type.lower() == 'pdf':
+            if not self.pdf_converter:
+                raise ValueError("PDF converter required for PDF processing")
+            images = await asyncio.to_thread(self.pdf_converter.convert, file_path, dpi=settings.OCR_DPI)
+        elif file_type.lower() in ['jpg', 'jpeg', 'png']:
+            images = [Image.open(file_path)]
+        else:
+            raise ValueError(f"Unsupported file type: {file_type}")
         
+        # OCR all images
         full_text_per_page = []
         for i, image in enumerate(images):
             text = await self._extract_text_from_image(image)
@@ -64,18 +60,24 @@ class BaseOCRProcessor(IDocumentProcessor):
         return chunks
     
     async def validate(self, file_path: str, file_type: str) -> bool:
-        if file_type.lower() != 'pdf':
-            return False
-        try:
-            with open(file_path, 'rb') as f:
-                return f.read(4) == b'%PDF'
-        except Exception:
-            return False
+        if file_type.lower() == 'pdf':
+            try:
+                with open(file_path, 'rb') as f:
+                    return f.read(4) == b'%PDF'
+            except Exception:
+                return False
+        elif file_type.lower() in ['jpg', 'jpeg', 'png']:
+            try:
+                Image.open(file_path)
+                return True
+            except Exception:
+                return False
+        return False
 
 class EasyOCRProcessor(BaseOCRProcessor):
     reader = None
 
-    def __init__(self, pdf_converter: IPdfToImageConverter, **kwargs):
+    def __init__(self, pdf_converter: IPdfToImageConverter = None, **kwargs):  # Add = None
         super().__init__(pdf_converter, **kwargs)
         try:
             if EasyOCRProcessor.reader is None:
@@ -96,7 +98,7 @@ class EasyOCRProcessor(BaseOCRProcessor):
 class PaddleOCRProcessor(BaseOCRProcessor):
     ocr_engine = None
 
-    def __init__(self, pdf_converter: IPdfToImageConverter, **kwargs):
+    def __init__(self, pdf_converter: IPdfToImageConverter = None, **kwargs):  # Add = None
         super().__init__(pdf_converter, **kwargs)
         try:
             if PaddleOCRProcessor.ocr_engine is None:
@@ -118,52 +120,3 @@ class PaddleOCRProcessor(BaseOCRProcessor):
         text = "\n".join(lines)
         print(f"--- PaddleOCR Raw Output ---\n{text}\n--------------------------") # <-- ADD THIS LINE
         return text
-
-class PDFProcessor(IDocumentProcessor):
-    def __init__(self, chunk_size: int = 1000, chunk_overlap: int = 200):
-        self.text_splitter = RecursiveCharacterTextSplitter(
-            chunk_size=chunk_size,
-            chunk_overlap=chunk_overlap
-        )
-    
-    async def process(self, file_path: str, file_type: str) -> List[Chunk]:
-        if file_type.lower() != 'pdf':
-            raise ValueError(f"PDFProcessor cannot handle {file_type} files")
-        
-        # --- FIX IS HERE ---
-        # Pass the configured languages to the loader
-        loader = UnstructuredPDFLoader(
-            file_path, 
-            mode="elements", 
-            strategy="hi_res",
-            languages=settings.OCR_LANGUAGES # CHANGED
-        )
-        documents = await asyncio.to_thread(loader.load)
-        
-        if not documents:
-            raise ValueError("No content extracted from PDF")
-        
-        split_docs = self.text_splitter.split_documents(documents)
-        
-        chunks = []
-        for i, doc in enumerate(split_docs):
-            chunk_id = f"{uuid.uuid4()}_{i}"
-            chunks.append(Chunk(
-                id=chunk_id,
-                content=doc.page_content,
-                document_id="",
-                metadata={
-                    "page": doc.metadata.get("page_number", -1),
-                    "source": doc.metadata.get("source", "")
-                }
-            ))
-        return chunks
-    
-    async def validate(self, file_path: str, file_type: str) -> bool:
-        if file_type.lower() != 'pdf':
-            return False
-        try:
-            with open(file_path, 'rb') as f:
-                return f.read(4) == b'%PDF'
-        except Exception:
-            return False

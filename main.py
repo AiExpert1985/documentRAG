@@ -1,4 +1,4 @@
-# main_refactored.py
+# main.py
 """Refactored main application with proper initialization"""
 import logging
 from contextlib import asynccontextmanager

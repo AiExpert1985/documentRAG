@@ -8,19 +8,8 @@ import io
 from core.interfaces import IPdfToImageConverter
 
 class PyMuPDFConverter(IPdfToImageConverter):
-    """Converts PDF to a list of PIL Images using PyMuPDF."""
-
     def convert(self, file_path: str, dpi: int = 300) -> List[Image.Image]:
-        """
-        Converts each page of a PDF into a PIL Image.
-
-        Args:
-            file_path (str): The path to the PDF file.
-            dpi (int): The resolution to render the images at.
-
-        Returns:
-            List[Image.Image]: A list of PIL Image objects.
-        """
+        """Converts PDF pages to PIL Images."""
         images = []
         doc = fitz.open(file_path)
         for page in doc:

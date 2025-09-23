@@ -1,4 +1,4 @@
-# services/rag_service_refactored.py
+# services/rag_service.py
 import logging
 from typing import List, Dict, Any, Optional, Tuple
 from pathlib import Path
