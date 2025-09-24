@@ -120,20 +120,20 @@ class RAGService(IRAGService):
         try:
             query_embedding = await self.embedding_service.generate_query_embedding(query)
             results = await self.vector_store.search(query_embedding, top_k)
-            await self.message_repo.save_search(query, len(results))
             
-            if not results:
-                return []
-                
+            # Filter valid results
             existing_docs = await self.document_repo.list_all()
             existing_ids = {doc.id for doc in existing_docs}
-            
             valid_results = [
                 result for result in results 
                 if result.chunk.document_id in existing_ids
             ]
             
+            # Save the search results using unified approach
+            await self.message_repo.save_search_results(query, valid_results)
+            
             return valid_results
+            
         except Exception as e:
             logger.error(f"Search failed: {e}")
             return []

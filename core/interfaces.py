@@ -93,7 +93,6 @@ class IDocumentRepository(ABC):
     """Interface for document data access"""
     
     @abstractmethod
-    # CHANGED: The signature now includes 'document_id' and 'stored_filename'
     async def create(self, document_id: str, filename: str, file_hash: str, stored_filename: str) -> Document:
         """Create new document record"""
         pass
@@ -141,6 +140,10 @@ class IMessageRepository(ABC):
         """Clear search history"""
         pass
 
+    @abstractmethod
+    async def save_search_results(self, query: str, results: List[SearchResult]) -> None:
+        """Save search results in structured format"""
+        pass
 
 # ============= File Storage Interface =============
 class IFileStorage(ABC):
@@ -170,7 +173,6 @@ class IRAGService(ABC):
         """Process and store a document from an UploadFile object."""
         pass
 
-    
     @abstractmethod
     async def search(self, query: str, top_k: int = 5) -> List[SearchResult]:
         """Search across all documents"""
@@ -181,22 +183,20 @@ class IRAGService(ABC):
         """Delete a document and its chunks"""
         pass
         
-    # --- ADDED ABSTRACT METHODS ---
     @abstractmethod
     async def clear_all(self) -> bool:
         """Clear all documents and vectors"""
         pass
         
     @abstractmethod
-    async def list_documents(self, request: Request) -> List[Dict[str, str]]: # CHANGED
+    async def list_documents(self, request: Request) -> List[Dict[str, str]]:
         """List all documents, including download URLs."""
         pass
         
     @abstractmethod
-    async def get_document_with_path(self, document_id: str) -> Optional[Dict[str, Any]]: # CHANGED
+    async def get_document_with_path(self, document_id: str) -> Optional[Dict[str, Any]]:
         """Get a document's details and its physical file path."""
         pass
-
 
 # ============= PDF to Image Converter Interface =============
 class IPdfToImageConverter(ABC):
