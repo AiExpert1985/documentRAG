@@ -11,7 +11,7 @@ from core.interfaces import (
     IMessageRepository, IFileStorage, SearchResult, Chunk
 )
 from services.document_processor_factory import DocumentProcessorFactory
-from utils.helpers import get_file_hash, validate_uploaded_file
+from utils.helpers import get_file_hash, validate_file_content, validate_uploaded_file
 
 logger = logging.getLogger(__name__)
 
@@ -73,28 +73,34 @@ class RAGService(IRAGService):
             try: await self.file_storage.delete(stored_filename)
             except Exception as e: logger.warning(f"File cleanup failed: {e}")
 
+    def _document_error_response(self, filename: str, error: str) -> ProcessDocumentResponse:
+        """Helper for document processing errors only"""
+        return ProcessDocumentResponse(
+            status="error", 
+            filename=filename, 
+            document_id="",
+            chunks=0, 
+            pages=0, 
+            error=error
+        )
+
     async def process_document(self, file: UploadFile) -> ProcessDocumentResponse:
         try:
-            file_hash, doc_id, stored_name = await self._prepare_file(file)
+            file_hash, doc_id, stored_name = await self._prepare_and_validate(file)
         except Exception as e:
-            return ProcessDocumentResponse(
-                status="error", filename=file.filename, document_id="",
-                chunks=0, pages=0, error=f"File preparation failed: {str(e)}"
-            )
+            return self._document_error_response(file.filename, f"File validation failed: {str(e)}")
         
         if await self.document_repo.get_by_hash(file_hash):
-            return ProcessDocumentResponse(
-                status="error", filename=file.filename, document_id="",
-                chunks=0, pages=0, error="Document already exists"
-            )
+            return self._document_error_response(file.filename, "Document already exists")
 
         document = None
         try:
             file_path = await self.file_storage.save(file, stored_name)
-            document = await self.document_repo.create(doc_id, file.filename, file_hash, stored_name)
             
-            file_type = Path(file.filename).suffix[1:].lower()
-            chunks = await self._process_chunks(file_path, file_type, document)
+            validate_file_content(file_path, file.filename)
+            
+            document = await self.document_repo.create(doc_id, file.filename, file_hash, stored_name)
+            chunks = await self._process_chunks(file_path, Path(file.filename).suffix[1:].lower(), document)
             
             if not await self.vector_store.add_chunks(chunks):
                 raise Exception("Failed to store vectors")
@@ -107,10 +113,7 @@ class RAGService(IRAGService):
         except Exception as e:
             logger.error(f"Processing failed for '{file.filename}': {e}")
             await self._cleanup(document, stored_name)
-            return ProcessDocumentResponse(
-                status="error", filename=file.filename, document_id="",
-                chunks=0, pages=0, error=str(e)
-            )
+            return self._document_error_response(file.filename, str(e))
 
     async def search(self, query: str, top_k: int = 5) -> List[SearchResult]:
         try:

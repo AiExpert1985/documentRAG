@@ -132,10 +132,6 @@ async def list_documents(
     rag_service: IRAGService = Depends(get_rag_service)
 ) -> DocumentsListResponse:
     documents = await rag_service.list_documents(request)
-    
-    # DEBUG: Add this print statement
-    print(f"DEBUG: Found {len(documents)} documents to send to the client: {documents}")
-    
     return DocumentsListResponse(documents=documents)
 
 @router.get("/status", response_model=StatusResponse)
