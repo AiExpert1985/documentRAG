@@ -1,4 +1,5 @@
 # services/rag_service_imp.py
+import asyncio
 import logging
 from typing import List, Dict, Any, Optional, Tuple
 from pathlib import Path
@@ -86,7 +87,7 @@ class RAGService(IRAGService):
 
     async def process_document(self, file: UploadFile) -> ProcessDocumentResponse:
         try:
-            file_hash, doc_id, stored_name = await self._prepare_and_validate(file)
+            file_hash, doc_id, stored_name = await self._prepare_file(file)
         except Exception as e:
             return self._document_error_response(file.filename, f"File validation failed: {str(e)}")
         
@@ -121,11 +122,16 @@ class RAGService(IRAGService):
             results = await self.vector_store.search(query_embedding, top_k)
             await self.message_repo.save_search(query, len(results))
             
-            # Filter stale results
-            valid_results = []
-            for result in results:
-                if await self.document_repo.get_by_id(result.chunk.document_id):
-                    valid_results.append(result)
+            if not results:
+                return []
+                
+            existing_docs = await self.document_repo.list_all()
+            existing_ids = {doc.id for doc in existing_docs}
+            
+            valid_results = [
+                result for result in results 
+                if result.chunk.document_id in existing_ids
+            ]
             
             return valid_results
         except Exception as e:
@@ -206,8 +212,11 @@ class RAGService(IRAGService):
             return False
     
     async def get_status(self) -> Dict[str, Any]:
-        documents = await self.document_repo.list_all()
-        chunk_count = await self.vector_store.count()
+        documents, chunk_count = await asyncio.gather(
+            self.document_repo.list_all(),
+            self.vector_store.count()
+        )
+        
         return {
             "document_loaded": ", ".join([d.filename for d in documents]) if documents else None,
             "chunks_available": chunk_count,

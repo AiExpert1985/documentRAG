@@ -1,6 +1,7 @@
 # infrastructure/repositories_imp.py
 """Database repository implementations"""
 from typing import List, Optional, Dict
+from fastapi import logger
 from sqlalchemy import select, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -56,10 +57,15 @@ class SQLDocumentRepository(IDocumentRepository):
         await self.session.commit()
         return True
     
-    async def delete_all(self) -> bool:
+async def delete_all(self) -> bool:
+    try:
         await self.session.execute(delete(DBDocument))
         await self.session.commit()
         return True
+    except Exception as e:
+        await self.session.rollback()  # ADD THIS LINE
+        logger.error(f"Failed to clear documents: {e}")
+        return False
 
 class SQLMessageRepository(IMessageRepository):
     def __init__(self, session: AsyncSession):
