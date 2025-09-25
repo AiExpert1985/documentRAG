@@ -56,8 +56,8 @@ def get_message_repository(session: AsyncSession = Depends(get_db)) -> IMessageR
 def get_rag_service(
     vector_store: IVectorStore = Depends(get_vector_store),
     embedding_service: IEmbeddingService = Depends(get_embedding_service),
-    file_storage: IFileStorage = Depends(get_file_storage),
     doc_processor_factory: DocumentProcessorFactory = Depends(get_document_processor_factory),
+    file_storage: IFileStorage = Depends(get_file_storage),
     document_repo: IDocumentRepository = Depends(get_document_repository),
     message_repo: IMessageRepository = Depends(get_message_repository)
 ) -> IRAGService:
@@ -75,5 +75,3 @@ def get_rag_service(
         document_repo=document_repo,
         message_repo=message_repo
     )
-
-# Remove the ServiceFactory class - replaced by get_rag_service function

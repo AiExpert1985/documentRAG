@@ -30,7 +30,7 @@ class SearchResponse(BaseModel):
     total_results: int
 
 class ProcessDocumentResponse(BaseModel):
-    status: str
+    status: str # processing operation succeeded or failed
     filename: str
     document_id: str
     chunks: int

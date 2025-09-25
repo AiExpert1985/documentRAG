@@ -9,7 +9,7 @@ import io
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain_core.documents import Document as LangchainDocument
 
-from core.interfaces import IDocumentProcessor, Chunk, IPdfToImageConverter
+from core.interfaces import IDocumentProcessor, DocumentChunk, IPdfToImageConverter
 from config import settings
 
 class BaseOCRProcessor(IDocumentProcessor):
@@ -19,7 +19,7 @@ class BaseOCRProcessor(IDocumentProcessor):
             chunk_size=chunk_size, chunk_overlap=chunk_overlap
         )
 
-    async def process(self, file_path: str, file_type: str) -> List[Chunk]:
+    async def process(self, file_path: str, file_type: str) -> List[DocumentChunk]:
         # Get images based on file type
         if file_type.lower() == 'pdf':
             if not self.pdf_converter:
@@ -46,7 +46,7 @@ class BaseOCRProcessor(IDocumentProcessor):
         # Split into chunks
         split_docs = self.text_splitter.split_documents(docs)
         return [
-            Chunk(
+            DocumentChunk(
                 id=f"{uuid.uuid4()}_{i}",
                 content=doc.page_content,
                 document_id="",  # Set by service layer

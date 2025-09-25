@@ -21,6 +21,14 @@ router = APIRouter()
 
 
 # API Endpoints
+
+@router.post("/upload-document", response_model=ProcessDocumentResponse)
+async def upload_document(
+    file: UploadFile = File(...),
+    rag_service: IRAGService = Depends(get_rag_service)
+) -> ProcessDocumentResponse:
+    return await rag_service.process_document(file) 
+
 @router.post("/search", response_model=SearchResponse)
 async def search_endpoint(
     request: Request, # CHANGED: Added Request object
@@ -65,13 +73,6 @@ async def search_endpoint(
         total_results=len(search_results)
     )
 
-
-@router.post("/upload-document", response_model=ProcessDocumentResponse)
-async def upload_document(
-    file: UploadFile = File(...),
-    rag_service: IRAGService = Depends(get_rag_service)
-) -> ProcessDocumentResponse:
-    return await rag_service.process_document(file) 
 
 @router.get("/download/{document_id}")
 async def download_document(

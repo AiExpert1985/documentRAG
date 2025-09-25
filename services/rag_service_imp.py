@@ -9,7 +9,7 @@ from fastapi import UploadFile, Request
 from api.types import ProcessDocumentResponse
 from core.interfaces import (
     IRAGService, IVectorStore, IEmbeddingService, IDocumentRepository, 
-    IMessageRepository, IFileStorage, SearchResult, Chunk
+    IMessageRepository, IFileStorage, SearchResult, DocumentChunk
 )
 from services.document_processor_factory import DocumentProcessorFactory
 from utils.helpers import get_file_hash, validate_file_content, validate_uploaded_file
@@ -41,7 +41,7 @@ class RAGService(IRAGService):
         doc_id = str(uuid4())
         return get_file_hash(content), doc_id, f"{doc_id}{Path(file.filename).suffix}"
 
-    async def _process_chunks(self, file_path: str, file_type: str, document) -> List[Chunk]:
+    async def _process_chunks(self, file_path: str, file_type: str, document) -> List[DocumentChunk]:
         processor = self.doc_processor_factory.get_processor(file_type)
         chunks = await processor.process(file_path, file_type)
         

@@ -5,38 +5,15 @@ from typing import List, Dict, Any, Optional
 from dataclasses import dataclass
 from fastapi import UploadFile, Request
 
-from api.types import ProcessDocumentResponse 
-
-@dataclass
-class Document:
-    """Domain model for documents"""
-    id: str
-    filename: str
-    file_hash: str
-    metadata: Dict[str, Any]
-
-@dataclass
-class Chunk:
-    """Domain model for document chunks"""
-    id: str
-    content: str
-    document_id: str
-    metadata: Dict[str, Any]
-    embedding: Optional[List[float]] = None
-
-@dataclass
-class SearchResult:
-    """Domain model for search results"""
-    chunk: Chunk
-    score: float
-    highlights: Optional[List[str]] = None
+from api.types import ProcessDocumentResponse, SearchResult
+from core.models import DocumentChunk, ProcessedDocument 
 
 # ============= Vector Store Interface =============
 class IVectorStore(ABC):
     """Interface for vector storage operations"""
     
     @abstractmethod
-    async def add_chunks(self, chunks: List[Chunk]) -> bool:
+    async def add_chunks(self, chunks: List[DocumentChunk]) -> bool:
         """Add document chunks with embeddings"""
         pass
     
@@ -65,7 +42,7 @@ class IDocumentProcessor(ABC):
     """Interface for document processing"""
     
     @abstractmethod
-    async def process(self, file_path: str, file_type: str) -> List[Chunk]:
+    async def process(self, file_path: str, file_type: str) -> List[DocumentChunk]:
         """Process document and return chunks"""
         pass
     
@@ -93,22 +70,22 @@ class IDocumentRepository(ABC):
     """Interface for document data access"""
     
     @abstractmethod
-    async def create(self, document_id: str, filename: str, file_hash: str, stored_filename: str) -> Document:
+    async def create(self, document_id: str, filename: str, file_hash: str, stored_filename: str) -> ProcessedDocument:
         """Create new document record"""
         pass
     
     @abstractmethod
-    async def get_by_id(self, document_id: str) -> Optional[Document]:
+    async def get_by_id(self, document_id: str) -> Optional[ProcessedDocument]:
         """Get document by ID"""
         pass
     
     @abstractmethod
-    async def get_by_hash(self, file_hash: str) -> Optional[Document]:
+    async def get_by_hash(self, file_hash: str) -> Optional[ProcessedDocument]:
         """Check if document with hash exists"""
         pass
     
     @abstractmethod
-    async def list_all(self) -> List[Document]:
+    async def list_all(self) -> List[ProcessedDocument]:
         """List all documents"""
         pass
     

@@ -21,7 +21,7 @@ Base = declarative_base()
 # --- SQLAlchemy Models ---
 
 # ✅
-class Message(Base):
+class MessageEntity(Base):
     __tablename__ = "messages"
     id = Column(Integer, primary_key=True, index=True)
     sender = Column(String, nullable=False)  # 'user' or 'ai'
@@ -29,7 +29,7 @@ class Message(Base):
     timestamp = Column(DateTime, default=datetime.utcnow)
 
 # ✅
-class Document(Base):
+class DocumentEntity(Base):
     __tablename__ = "documents"
     id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
     filename = Column(String, nullable=False) # The original filename

@@ -6,7 +6,7 @@ from typing import List, Optional
 from chromadb import Client
 from chromadb.utils.embedding_functions import SentenceTransformerEmbeddingFunction
 
-from core.interfaces import IVectorStore, Chunk, SearchResult
+from core.interfaces import IVectorStore, DocumentChunk, SearchResult
 
 logger = logging.getLogger(__name__)
 
@@ -26,7 +26,7 @@ class ChromaDBVectorStore(IVectorStore):
                 name=self._collection_name
             )
     
-    async def add_chunks(self, chunks: List[Chunk]) -> bool:
+    async def add_chunks(self, chunks: List[DocumentChunk]) -> bool:
         """Add chunks to ChromaDB"""
         try:
             await self._ensure_collection()
@@ -67,7 +67,7 @@ class ChromaDBVectorStore(IVectorStore):
             search_results = []
             if results['ids'] and results['ids'][0]:
                 for i in range(len(results['ids'][0])):
-                    chunk = Chunk(
+                    chunk = DocumentChunk(
                         id=results['ids'][0][i],
                         content=results['documents'][0][i],
                         document_id=results['metadatas'][0][i].get('document_id'),
