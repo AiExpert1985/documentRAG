@@ -10,10 +10,10 @@ from core.interfaces import (
     IRAGService, IVectorStore, IEmbeddingService, 
     IDocumentRepository, IMessageRepository, IFileStorage
 )
-from infrastructure.vector_stores_imp import ChromaDBVectorStore
+from infrastructure.vector_stores import ChromaDBVectorStore
 from infrastructure.embedding_services import SentenceTransformerEmbedding
-from infrastructure.repositories_imp import SQLDocumentRepository, SQLMessageRepository
-from infrastructure.file_storage_imp import LocalFileStorage
+from infrastructure.repositories import SQLDocumentRepository, SQLMessageRepository
+from infrastructure.file_storage import LocalFileStorage
 from services.rag_service_imp import RAGService
 from services.document_processor_factory import DocumentProcessorFactory
 

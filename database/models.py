@@ -1,4 +1,4 @@
-# database/database.py
+# database/models.py
 
 import logging
 import uuid

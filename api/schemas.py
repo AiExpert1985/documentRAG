@@ -1,4 +1,4 @@
-# api/types.py
+# api/schemas.py
 from pydantic import BaseModel
 from typing import Optional, List, Dict
 from pydantic import BaseModel, HttpUrl

@@ -1,4 +1,4 @@
-# utils/helpers.py - UPDATED with better validation
+# utils/helpers.py
 
 import hashlib
 import re

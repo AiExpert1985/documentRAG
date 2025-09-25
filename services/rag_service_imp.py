@@ -1,4 +1,4 @@
-# services/rag_service_imp.py
+# services/rag_service.py
 import asyncio
 import logging
 from typing import List, Dict, Any, Optional, Tuple
@@ -6,7 +6,7 @@ from pathlib import Path
 from uuid import uuid4
 
 from fastapi import UploadFile, Request
-from api.types import ProcessDocumentResponse
+from api.schemas import ProcessDocumentResponse
 from core.interfaces import (
     IRAGService, IVectorStore, IEmbeddingService, IDocumentRepository, 
     IMessageRepository, IFileStorage, SearchResult, DocumentChunk

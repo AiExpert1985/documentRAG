@@ -5,7 +5,7 @@ from typing import List, Dict, Any, Optional
 from dataclasses import dataclass
 from fastapi import UploadFile, Request
 
-from api.types import ProcessDocumentResponse, SearchResult
+from api.schemas import ProcessDocumentResponse, SearchResult
 from core.models import DocumentChunk, ProcessedDocument 
 
 # ============= Vector Store Interface =============

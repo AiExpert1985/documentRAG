@@ -10,7 +10,7 @@ from database.dependencies import get_db
 from config import settings
 from core.interfaces import IRAGService
 from services.factory import get_rag_service
-from api.types import (
+from api.schemas import (
     ProcessDocumentResponse, SearchResponse, StatusResponse, 
     DocumentsListResponse, DeleteResponse, ChatRequest
 )
@@ -146,7 +146,7 @@ async def get_status(
 async def get_search_history(
     db: AsyncSession = Depends(get_db)
 ) -> List[Dict]:
-    from infrastructure.repositories_imp import SQLMessageRepository
+    from infrastructure.repositories import SQLMessageRepository
     message_repo = SQLMessageRepository(db)
     return await message_repo.get_search_history(limit=50)
 
@@ -154,7 +154,7 @@ async def get_search_history(
 async def clear_search_history(
     db: AsyncSession = Depends(get_db)
 ) -> DeleteResponse:
-    from infrastructure.repositories_imp import SQLMessageRepository
+    from infrastructure.repositories import SQLMessageRepository
     message_repo = SQLMessageRepository(db)
     success = await message_repo.clear_history()
     if success:

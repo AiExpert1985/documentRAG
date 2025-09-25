@@ -6,7 +6,7 @@ from fastapi import FastAPI
 
 from config import settings
 from services.logger_config import setup_logging
-from database.database import Base, async_engine
+from database.models import Base, async_engine
 from api.endpoints import router
 
 # Setup logging

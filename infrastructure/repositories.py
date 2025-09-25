@@ -1,4 +1,4 @@
-# infrastructure/repositories_imp.py
+# infrastructure/repositories.py
 """Database repository implementations"""
 import json
 import logging
@@ -7,7 +7,7 @@ from sqlalchemy import select, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.interfaces import IDocumentRepository, IMessageRepository, ProcessedDocument , SearchResult
-from database.database import DocumentEntity, MessageEntity
+from database.models import DocumentEntity, MessageEntity
 
 logger = logging.getLogger(__name__)
 
