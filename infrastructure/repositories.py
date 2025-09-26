@@ -6,7 +6,8 @@ from typing import List, Optional, Dict
 from sqlalchemy import select, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from core.interfaces import IDocumentRepository, IMessageRepository, ProcessedDocument , SearchResult
+from core.interfaces import IDocumentRepository, IMessageRepository, ProcessedDocument 
+from core.models import ChunkSearchResult
 from database.models import DocumentEntity, MessageEntity
 
 logger = logging.getLogger(__name__)
@@ -79,7 +80,7 @@ class SQLMessageRepository(IMessageRepository):
         self.session.add(message)
         await self.session.commit()
     
-    async def save_search_results(self, query: str, results: List[SearchResult]) -> None:
+    async def save_search_results(self, query: str, results: List[ChunkSearchResult]) -> None:
         """Save query and results using same structure as live chat"""
         # Save user question
         user_msg = MessageEntity(sender="user", content=query)

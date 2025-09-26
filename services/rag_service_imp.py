@@ -9,8 +9,9 @@ from fastapi import UploadFile, Request
 from api.schemas import ProcessDocumentResponse
 from core.interfaces import (
     IRAGService, IVectorStore, IEmbeddingService, IDocumentRepository, 
-    IMessageRepository, IFileStorage, SearchResult, DocumentChunk
+    IMessageRepository, IFileStorage, DocumentChunk
 )
+from core.models import ChunkSearchResult
 from services.document_processor_factory import DocumentProcessorFactory
 from utils.helpers import get_file_hash, validate_file_content, validate_uploaded_file
 
@@ -116,7 +117,7 @@ class RAGService(IRAGService):
             await self._cleanup(document, stored_name)
             return self._document_error_response(file.filename, str(e))
 
-    async def search(self, query: str, top_k: int = 5) -> List[SearchResult]:
+    async def search(self, query: str, top_k: int = 5) -> List[ChunkSearchResult]:
         try:
             query_embedding = await self.embedding_service.generate_query_embedding(query)
             results = await self.vector_store.search(query_embedding, top_k)

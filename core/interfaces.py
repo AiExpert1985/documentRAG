@@ -5,8 +5,8 @@ from typing import List, Dict, Any, Optional
 from dataclasses import dataclass
 from fastapi import UploadFile, Request
 
-from api.schemas import ProcessDocumentResponse, SearchResult
-from core.models import DocumentChunk, ProcessedDocument 
+from api.schemas import ProcessDocumentResponse
+from core.models import ChunkSearchResult, DocumentChunk, ProcessedDocument 
 
 # ============= Vector Store Interface =============
 class IVectorStore(ABC):
@@ -18,7 +18,7 @@ class IVectorStore(ABC):
         pass
     
     @abstractmethod
-    async def search(self, query_embedding: List[float], top_k: int = 5) -> List[SearchResult]:
+    async def search(self, query_embedding: List[float], top_k: int = 5) -> List[ChunkSearchResult]:
         """Search for similar chunks"""
         pass
     
@@ -118,7 +118,7 @@ class IMessageRepository(ABC):
         pass
 
     @abstractmethod
-    async def save_search_results(self, query: str, results: List[SearchResult]) -> None:
+    async def save_search_results(self, query: str, results: List[ChunkSearchResult]) -> None:
         """Save search results in structured format"""
         pass
 
@@ -151,7 +151,7 @@ class IRAGService(ABC):
         pass
 
     @abstractmethod
-    async def search(self, query: str, top_k: int = 5) -> List[SearchResult]:
+    async def search(self, query: str, top_k: int = 5) -> List[ChunkSearchResult]:
         """Search across all documents"""
         pass
     
