@@ -8,8 +8,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from database.dependencies import get_db
 
 from config import settings
-from core.interfaces import IRAGService
-from services.factory import get_rag_service
+from core.interfaces import IMessageRepository, IRAGService
+from services.factory import get_message_repository, get_rag_service
 from api.schemas import (
     ProcessDocumentResponse, SearchResponse, StatusResponse, 
     DocumentsListResponse, DeleteResponse, ChatRequest
@@ -144,18 +144,14 @@ async def get_status(
 
 @router.get("/search-history", response_model=List[Dict])
 async def get_search_history(
-    db: AsyncSession = Depends(get_db)
+    message_repo: IMessageRepository = Depends(get_message_repository)  # Changed
 ) -> List[Dict]:
-    from infrastructure.repositories import SQLMessageRepository
-    message_repo = SQLMessageRepository(db)
     return await message_repo.get_search_history(limit=50)
 
 @router.delete("/search-history", response_model=DeleteResponse)
 async def clear_search_history(
-    db: AsyncSession = Depends(get_db)
+    message_repo: IMessageRepository = Depends(get_message_repository)  # Changed
 ) -> DeleteResponse:
-    from infrastructure.repositories import SQLMessageRepository
-    message_repo = SQLMessageRepository(db)
     success = await message_repo.clear_history()
     if success:
         return DeleteResponse(
