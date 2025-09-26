@@ -6,7 +6,8 @@ from typing import List, Optional
 from chromadb import Client
 from chromadb.utils.embedding_functions import SentenceTransformerEmbeddingFunction
 
-from core.interfaces import IVectorStore, DocumentChunk, SearchResult
+from core.interfaces import IVectorStore, DocumentChunk
+from core.models import ChunkSearchResult
 
 logger = logging.getLogger(__name__)
 
@@ -52,7 +53,7 @@ class ChromaDBVectorStore(IVectorStore):
             logger.error(f"Failed to add chunks to ChromaDB: {e}")
             return False
     
-    async def search(self, query_embedding: List[float], top_k: int = 5) -> List[SearchResult]:
+    async def search(self, query_embedding: List[float], top_k: int = 5) -> List[ChunkSearchResult]:
         """Search for similar chunks"""
         try:
             await self._ensure_collection()
@@ -73,7 +74,7 @@ class ChromaDBVectorStore(IVectorStore):
                         document_id=results['metadatas'][0][i].get('document_id'),
                         metadata=results['metadatas'][0][i]
                     )
-                    search_results.append(SearchResult(
+                    search_results.append(ChunkSearchResult(
                         chunk=chunk,
                         score=1 - results['distances'][0][i]  # Convert distance to similarity
                     ))
