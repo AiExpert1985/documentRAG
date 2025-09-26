@@ -12,19 +12,18 @@ from infrastructure.pdf_converters import PyMuPDFConverter
 class DocumentProcessorFactory:
     """Factory for document processors with strategy selection"""
     
-    def __init__(self):
+    def __init__(self, pdf_converter_class=None):  # ✅ CHANGED: Optional parameter
         self._ocr_strategies: Dict[str, Type[IDocumentProcessor]] = {
             "easyocr": EasyOCRProcessor,
             "paddleocr": PaddleOCRProcessor
         }
-        self.pdf_converter = PyMuPDFConverter()
+        # ✅ CHANGED: Use injected class or default to PyMuPDFConverter
+        self.pdf_converter_class = pdf_converter_class or PyMuPDFConverter
 
     def _get_pdf_processor(self) -> IDocumentProcessor:
         """Get PDF processor based on processing method."""
         if settings.PDF_PROCESSING_METHOD == "ocr":
             return self._get_ocr_processor()
-        # Future: elif settings.PDF_PROCESSING_METHOD == "text_extraction":
-        #     return TextExtractionProcessor()
         else:
             raise ValueError(f"Unknown PDF processing method: {settings.PDF_PROCESSING_METHOD}")
 
@@ -37,17 +36,18 @@ class DocumentProcessorFactory:
             available = ", ".join(self._ocr_strategies.keys())
             raise ValueError(f"Unknown OCR engine: '{engine}'. Available: {available}")
         
-        return processor_class(pdf_converter=self.pdf_converter)
+        # ✅ CHANGED: Create new instance from injected/default class
+        pdf_converter = self.pdf_converter_class()
+        return processor_class(pdf_converter=pdf_converter)
         
 
-    def get_processor(self, file_type: str) -> IDocumentProcessor:  # Move this inside the class
+    def get_processor(self, file_type: str) -> IDocumentProcessor:
         """Get processor based on file type."""
         file_type = file_type.lower()
         
         if file_type == "pdf":
             return self._get_pdf_processor()
         elif file_type in ["jpg", "jpeg", "png"]:
-            # Pass None for pdf_converter since images don't need PDF conversion
             engine = settings.OCR_ENGINE
             processor_class = self._ocr_strategies.get(engine.lower())
             if not processor_class:
