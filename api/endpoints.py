@@ -19,9 +19,6 @@ from utils.helpers import validate_document_id
 
 router = APIRouter()
 
-
-# API Endpoints
-
 @router.post("/upload-document", response_model=ProcessDocumentResponse)
 async def upload_document(
     file: UploadFile = File(...),

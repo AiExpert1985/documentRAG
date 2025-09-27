@@ -11,7 +11,7 @@ from core.interfaces import (
     IRAGService, IVectorStore, IEmbeddingService, IDocumentRepository, 
     IMessageRepository, IFileStorage, DocumentChunk
 )
-from core.models import ChunkSearchResult
+from core.models import ChunkSearchResult, ProcessedDocument
 from services.document_processor_factory import DocumentProcessorFactory
 from utils.helpers import get_file_extension, get_file_hash, sanitize_filename, validate_file_content, validate_uploaded_file
 
@@ -41,10 +41,8 @@ class RAGService(IRAGService):
         
         doc_id = str(uuid4())
         
-        # --- FIX #3: SANITIZE FILENAME FOR SECURITY ---
         safe_suffix = sanitize_filename(Path(file.filename).suffix)
         stored_name = f"{doc_id}{safe_suffix}"
-        # --------------------------------------------
         
         return get_file_hash(content), doc_id, stored_name
 
@@ -107,9 +105,9 @@ class RAGService(IRAGService):
             
             validate_file_content(file_path, file.filename)
             
-            document = await self.document_repo.create(doc_id, file.filename, file_hash, stored_name)
-            file_type = get_file_extension(file.filename)
-            chunks = await self._process_chunks(file_path, file_type, document)
+            document : ProcessedDocument  = await self.document_repo.create(doc_id, file.filename, file_hash, stored_name)
+            file_type : str = get_file_extension(file.filename)
+            chunks : List[DocumentChunk] = await self._process_chunks(file_path, file_type, document)
             
             if not await self.vector_store.add_chunks(chunks):
                 raise Exception("Failed to store vectors")
