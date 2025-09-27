@@ -42,7 +42,7 @@ class Settings(BaseSettings):
         return self.IMAGE_EXTENSIONS + self.DOCUMENT_EXTENSIONS
     
     # API/RAG Configuration
-    OCR_TIMEOUT_SECONDS: float = 30.0
+    OCR_TIMEOUT_SECONDS: float = 300.0
     SNIPPET_LENGTH: int = 300
     DEFAULT_SEARCH_RESULTS: int = 5
     
