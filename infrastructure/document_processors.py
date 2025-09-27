@@ -20,12 +20,13 @@ class BaseOCRProcessor(IDocumentProcessor):
         )
 
     async def process(self, file_path: str, file_type: str) -> List[DocumentChunk]:
-        # Get images based on file type
-        if file_type.lower() == 'pdf':
+        # file_type is guaranteed to be lowercase by the service layer
+        
+        if file_type == 'pdf':
             if not self.pdf_converter:
                 raise ValueError("PDF converter required for PDF processing")
             images = await asyncio.to_thread(self.pdf_converter.convert, file_path, dpi=settings.OCR_DPI)
-        elif file_type.lower() in ['jpg', 'jpeg', 'png']:
+        elif file_type in settings.IMAGE_EXTENSIONS: # Use config for comparison
             images = [Image.open(file_path)]
         else:
             raise ValueError(f"Unsupported file type: {file_type}")
@@ -33,7 +34,13 @@ class BaseOCRProcessor(IDocumentProcessor):
         # OCR all images and create documents
         docs = []
         for i, image in enumerate(images):
-            text = await self._extract_text_from_image(image)
+            try:
+                text = await asyncio.wait_for(
+                    self._extract_text_from_image(image),
+                    timeout=settings.OCR_TIMEOUT_SECONDS
+                )
+            except asyncio.TimeoutError:
+                raise ValueError(f"OCR timeout on page {i+1} after {settings.OCR_TIMEOUT_SECONDS}s")
             if text.strip():  # Only add non-empty text
                 docs.append(LangchainDocument(
                     page_content=text,
@@ -57,19 +64,17 @@ class BaseOCRProcessor(IDocumentProcessor):
     
     async def validate(self, file_path: str, file_type: str) -> bool:
         try:
-            if file_type.lower() == 'pdf':
+            # --- FIX #1 & #2: REMOVED .lower() AND USE CONFIG ---
+            if file_type == 'pdf':
                 with open(file_path, 'rb') as f:
                     return f.read(4) == b'%PDF'
-            elif file_type.lower() in ['jpg', 'jpeg', 'png']:
+            elif file_type in settings.IMAGE_EXTENSIONS:
                 Image.open(file_path).verify()
                 return True
+            # --------------------------------------------------
         except Exception:
             pass
         return False
-
-    async def _extract_text_from_image(self, image: Image.Image) -> str:
-        # Override in subclasses
-        raise NotImplementedError
 
 class EasyOCRProcessor(BaseOCRProcessor):
     reader = None

@@ -48,21 +48,27 @@ async def search_endpoint(
             detail="Please upload a document first"
         )
     
-    results = await rag_service.search(chat_request.question, top_k=5)
+    # --- FIX #6: USE CONFIG FOR TOP_K ---
+    results = await rag_service.search(chat_request.question, top_k=settings.DEFAULT_SEARCH_RESULTS)
     
     base_url = str(request.base_url)
     search_results = []
+    
     for result in results:
+        content = result.chunk.content
+        # --- FIX #6: USE CONFIG FOR SNIPPET LENGTH ---
+        content_snippet = (
+            content[:settings.SNIPPET_LENGTH] + "..." 
+            if len(content) > settings.SNIPPET_LENGTH 
+            else content
+        )
+        # ---------------------------------------------
+        
         search_results.append({
             "document_name": result.chunk.metadata.get("document_name", "Unknown"),
             "page_number": result.chunk.metadata.get("page", 0),
-            "content_snippet": (
-                result.chunk.content[:300] + "..." 
-                if len(result.chunk.content) > 300 
-                else result.chunk.content
-            ),
+            "content_snippet": content_snippet,
             "document_id": result.chunk.document_id,
-            # ADD THIS LINE:
             "download_url": f"{base_url}download/{result.chunk.document_id}"
         })
     
@@ -144,13 +150,13 @@ async def get_status(
 
 @router.get("/search-history", response_model=List[Dict])
 async def get_search_history(
-    message_repo: IMessageRepository = Depends(get_message_repository)  # Changed
+    message_repo: IMessageRepository = Depends(get_message_repository) # Use DI
 ) -> List[Dict]:
     return await message_repo.get_search_history(limit=50)
 
 @router.delete("/search-history", response_model=DeleteResponse)
 async def clear_search_history(
-    message_repo: IMessageRepository = Depends(get_message_repository)  # Changed
+    message_repo: IMessageRepository = Depends(get_message_repository) # Use DI
 ) -> DeleteResponse:
     success = await message_repo.clear_history()
     if success:
@@ -159,3 +165,12 @@ async def clear_search_history(
             message="Search history cleared successfully"
         )
     raise HTTPException(status_code=500, detail="Failed to clear search history")
+# ---------------------------------
+
+
+@router.get("/config")
+async def get_config():
+    return {
+        "allowed_extensions": settings.ALLOWED_FILE_EXTENSIONS,
+        "max_file_size_mb": settings.MAX_FILE_SIZE // (1024 * 1024)
+    }

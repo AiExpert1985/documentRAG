@@ -2,8 +2,7 @@
 """Enhanced configuration with new settings"""
 from typing import List
 from pydantic_settings import BaseSettings
-from utils.paths import get_log_file_path
-from utils.paths import get_project_root
+from utils.paths import get_log_file_path, get_project_root
 
 class Settings(BaseSettings):
     """Application configuration"""
@@ -25,29 +24,36 @@ class Settings(BaseSettings):
     # Document processing
     CHUNK_SIZE: int = 1000
     CHUNK_OVERLAP: int = 200
-    MAX_FILE_SIZE: int = 50 * 1024 * 1024  # 50MB
+    MAX_FILE_SIZE: int = 50 * 1024 * 1024
     UPLOADS_DIR: str = f"{get_project_root()}/uploads"
     
     # PDF processing method selection
-    PDF_PROCESSING_METHOD: str = "ocr"  # or "text_extraction" in future
-    OCR_ENGINE: str = "easyocr"        # Only used when method is "ocr"
-    
-    # OCR settings (only used when PDF_PROCESSING_METHOD = "ocr")
+    PDF_PROCESSING_METHOD: str = "ocr"
+    OCR_ENGINE: str = "easyocr"
     OCR_DPI: int = 300
     OCR_LANGUAGES: List[str] = ["ar", "en"]
     
-    # File support
-    ALLOWED_FILE_EXTENSIONS: List[str] = ["pdf", "jpg", "jpeg", "png"]
-
+    # File type categorization
+    IMAGE_EXTENSIONS: List[str] = ["jpg", "jpeg", "png"]
+    DOCUMENT_EXTENSIONS: List[str] = ["pdf"]
+    
+    @property
+    def ALLOWED_FILE_EXTENSIONS(self) -> List[str]:
+        return self.IMAGE_EXTENSIONS + self.DOCUMENT_EXTENSIONS
+    
+    # API/RAG Configuration
+    OCR_TIMEOUT_SECONDS: float = 30.0
+    SNIPPET_LENGTH: int = 300
+    DEFAULT_SEARCH_RESULTS: int = 5
+    
     # API settings
     REQUEST_TIMEOUT: int = 60
-    MAX_SEARCH_RESULTS: int = 10
+    MAX_SEARCH_RESULTS: int = 10  # Legacy setting
     
     # App metadata
     APP_TITLE: str = "Document RAG System"
     APP_VERSION: str = "2.0.0"
     
-    # --- ADDED MISSING SETTINGS ---
     # Performance
     USE_CONNECTION_POOLING: bool = True
     MAX_CONNECTIONS: int = 10

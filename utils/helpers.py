@@ -69,3 +69,8 @@ def sanitize_filename(filename: str) -> str:
     # Prevent directory traversal
     safe_name = os.path.basename(safe_name)
     return safe_name[:100]  # Limit length
+
+
+def get_file_extension(filename: str) -> str:
+    """Extract normalized file extension (lowercase, no dot) from filename."""
+    return Path(filename).suffix[1:].lower()

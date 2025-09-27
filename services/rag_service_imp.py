@@ -13,7 +13,7 @@ from core.interfaces import (
 )
 from core.models import ChunkSearchResult
 from services.document_processor_factory import DocumentProcessorFactory
-from utils.helpers import get_file_hash, validate_file_content, validate_uploaded_file
+from utils.helpers import get_file_extension, get_file_hash, sanitize_filename, validate_file_content, validate_uploaded_file
 
 logger = logging.getLogger(__name__)
 
@@ -40,7 +40,13 @@ class RAGService(IRAGService):
         await file.seek(0)
         
         doc_id = str(uuid4())
-        return get_file_hash(content), doc_id, f"{doc_id}{Path(file.filename).suffix}"
+        
+        # --- FIX #3: SANITIZE FILENAME FOR SECURITY ---
+        safe_suffix = sanitize_filename(Path(file.filename).suffix)
+        stored_name = f"{doc_id}{safe_suffix}"
+        # --------------------------------------------
+        
+        return get_file_hash(content), doc_id, stored_name
 
     async def _process_chunks(self, file_path: str, file_type: str, document) -> List[DocumentChunk]:
         processor = self.doc_processor_factory.get_processor(file_type)
@@ -102,7 +108,8 @@ class RAGService(IRAGService):
             validate_file_content(file_path, file.filename)
             
             document = await self.document_repo.create(doc_id, file.filename, file_hash, stored_name)
-            chunks = await self._process_chunks(file_path, Path(file.filename).suffix[1:].lower(), document)
+            file_type = get_file_extension(file.filename)
+            chunks = await self._process_chunks(file_path, file_type, document)
             
             if not await self.vector_store.add_chunks(chunks):
                 raise Exception("Failed to store vectors")
