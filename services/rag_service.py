@@ -8,7 +8,7 @@ from uuid import uuid4
 from fastapi import UploadFile, Request
 from api.schemas import ProcessDocumentResponse
 from core.interfaces import (
-    IRAGService, IVectorStore, IEmbeddingService, IDocumentRepository, 
+    IDocumentProcessor, IRAGService, IVectorStore, IEmbeddingService, IDocumentRepository, 
     IMessageRepository, IFileStorage, DocumentChunk
 )
 from core.models import ChunkSearchResult, ProcessedDocument
@@ -47,8 +47,8 @@ class RAGService(IRAGService):
         return get_file_hash(content), doc_id, stored_name
 
     async def _process_chunks(self, file_path: str, file_type: str, document) -> List[DocumentChunk]:
-        processor = self.doc_processor_factory.get_processor(file_type)
-        chunks = await processor.process(file_path, file_type)
+        processor : IDocumentProcessor = self.doc_processor_factory.get_processor(file_type)
+        chunks : List[DocumentChunk] = await processor.process(file_path, file_type)
         
         if not chunks:
             raise ValueError("No content extracted")
