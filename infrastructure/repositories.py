@@ -35,6 +35,7 @@ class SQLDocumentRepository(IDocumentRepository):
         self.session.add(db_doc)
         await self.session.commit()
         await self.session.refresh(db_doc)
+        logger.info(f"✓ Successfully created ProcessedDocument in database")
         return self._to_domain(db_doc)
 
     async def get_by_id(self, document_id: str) -> Optional[ProcessedDocument]:

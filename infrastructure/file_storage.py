@@ -29,7 +29,7 @@ class LocalFileStorage(IFileStorage):
             with open(file_path, "wb") as buffer:
                 content = await file.read()
                 buffer.write(content)
-            logger.info(f"Successfully saved file to {file_path}")
+            logger.info(f"✓ Successfully saved file to {file_path}")
             return str(file_path)
         except Exception as e:
             logger.error(f"Failed to save file to {file_path}: {e}")

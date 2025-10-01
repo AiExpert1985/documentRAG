@@ -5,7 +5,7 @@ import re
 import os
 from pathlib import Path
 
-from fastapi import UploadFile, HTTPException
+from fastapi import UploadFile, HTTPException, logger
 from config import settings
 
 def validate_file_exists(file: UploadFile) -> None:
@@ -72,6 +72,8 @@ def validate_file_content(file_path: str, filename: str) -> None:
         raise HTTPException(status_code=400, detail="Invalid JPEG file")
     elif extension == '.png' and not header.startswith(b'\x89PNG'):
         raise HTTPException(status_code=400, detail="Invalid PNG file")
+    
+    logger.info(f"✓ Successfully validated file content")
 
 def validate_uploaded_file(file: UploadFile) -> None:
     """Complete file validation."""

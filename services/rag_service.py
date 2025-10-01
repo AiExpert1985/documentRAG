@@ -62,9 +62,53 @@ class RAGService(IRAGService):
         safe_suffix = sanitize_filename(Path(file.filename).suffix)
         stored_name = f"{doc_id}{safe_suffix}"
         
+
+        logger.info(f"✓ file is prepared (validation, hash, and secure filename)")
         return get_file_hash(content), doc_id, stored_name
 
     async def _process_chunks(self, file_path: str, file_type: str, document) -> List[DocumentChunk]:
+        """
+        Orchestrates text extraction, metadata enrichment, and embedding generation for a document.
+        
+        Coordinates the complete processing pipeline: extracts text chunks from the file using
+        the appropriate OCR processor, enriches each chunk with document metadata, and generates
+        vector embeddings for semantic search.
+        
+        Args:
+            file_path: Absolute path to the document file on disk
+            file_type: Normalized file extension ("pdf", "jpg", "jpeg", "png")
+            document: ProcessedDocument instance containing document ID and metadata
+            
+        Returns:
+            List[DocumentChunk]: Fully processed chunks ready for vector store insertion,
+                                each containing text content, embeddings, document ID,
+                                and metadata (document name, page number)
+            
+        Raises:
+            ValueError: If no text content is extracted from the document
+            Exception: If embedding generation fails
+            
+        Process Flow:
+            1. Get appropriate processor for file type (PDF or image)
+            2. Extract and split text into chunks via OCR
+            3. Enrich each chunk with document_id and document_name metadata
+            4. Generate embeddings for all chunks in batch
+            5. Attach embeddings to corresponding chunks
+            
+        Example:
+            chunks = await service._process_chunks(
+                "/uploads/abc.pdf",
+                "pdf", 
+                document_record
+            )
+            
+            Returns chunks ready for: await vector_store.add_chunks(chunks)
+            
+        Note:
+            This method assumes the file has already been validated and saved to disk.
+            Embedding generation happens in batch for efficiency rather than per-chunk.
+            All chunks from a single document share the same document_id and document_name.
+        """
         processor : IDocumentProcessor = self.doc_processor_factory.get_processor(file_type)
         chunks : List[DocumentChunk] = await processor.process(file_path, file_type)
         
