@@ -71,7 +71,35 @@ class IDocumentRepository(ABC):
     
     @abstractmethod
     async def create(self, document_id: str, filename: str, file_hash: str, stored_filename: str) -> ProcessedDocument:
-        """Create new document record"""
+        """
+        Creates a new document record in the database.
+        
+        Stores metadata about an uploaded document including its unique identifier,
+        original filename, content hash for duplicate detection, and the secure filename
+        used for disk storage.
+        
+        Args:
+            document_id: Unique UUID identifier for the document
+            filename: Original filename from the upload (user-visible name)
+            file_hash: SHA256 hash of file content for duplicate detection
+            stored_filename: Secure filename used on disk (UUID-based)
+            
+        Returns:
+            ProcessedDocument: Domain model representing the created database record
+            
+        Example:
+            doc = await repo.create(
+                document_id="123e4567-e89b",
+                filename="company_policy.pdf",
+                file_hash="a3f2e1b...",
+                stored_filename="123e4567-e89b.pdf"
+            )
+            
+        Note:
+            This only creates the database record. The actual file must be saved
+            to disk separately using the file storage service. The stored_filename
+            is needed later to locate and delete the physical file.
+        """
         pass
     
     @abstractmethod
@@ -81,7 +109,20 @@ class IDocumentRepository(ABC):
     
     @abstractmethod
     async def get_by_hash(self, file_hash: str) -> Optional[ProcessedDocument]:
-        """Check if document with hash exists"""
+        """
+        Retrieves a document by its content hash to detect duplicate uploads.
+        
+        Uses SHA256 hash comparison to find documents with identical content,
+        even if filenames differ. This prevents processing the same document
+        multiple times.
+        
+        Args:
+            file_hash: SHA256 hash of the file content (64-character hex string)
+            
+        Returns:
+            ProcessedDocument if a document with matching hash exists, None otherwise
+
+        """
         pass
     
     @abstractmethod
@@ -128,7 +169,28 @@ class IFileStorage(ABC):
 
     @abstractmethod
     async def save(self, file: UploadFile, filename: str) -> str:
-        """Save an uploaded file and return its stored name."""
+        """
+        Saves an uploaded file to the configured storage directory.
+        
+        Writes the file content to disk using the provided filename. Creates the
+        upload directory if it doesn't exist. The filename should already be
+        sanitized and unique (typically UUID-based) by the caller.
+        
+        Args:
+            file: The uploaded file object containing content to save
+            filename: Secure filename to use for storage (e.g., "uuid123.pdf")
+            
+        Returns:
+            str: Full absolute path to the saved file
+            
+        Raises:
+            Exception: If file cannot be written to disk (permissions, disk full, etc.)
+            
+        Example:
+            file_path = await storage.save(uploaded_file, "abc-123.pdf")
+
+            Returns: "/app/uploads/abc-123.pdf"
+        """
         pass
 
     @abstractmethod

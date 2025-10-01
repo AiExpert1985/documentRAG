@@ -35,6 +35,24 @@ class RAGService(IRAGService):
         self.message_repo = message_repo
 
     async def _prepare_file(self, file: UploadFile) -> Tuple[str, str, str]:
+        '''
+        Prepares an uploaded file for processing by validating, hashing, and generating a secure filename.
+        
+        This method performs pre-save validation and creates the necessary identifiers before
+        the file is written to disk. It does NOT save the file - that happens in the caller.
+        
+        Args:
+            file: The uploaded file object from FastAPI
+            
+        Returns:
+            Tuple of (file_hash, document_id, stored_filename):
+                - file_hash: SHA256 hash of file content for duplicate detection
+                - document_id: UUID for database record
+                - stored_filename: Secure filename for disk storage (UUID + sanitized extension)
+                
+        Raises:
+            HTTPException: If file validation fails (missing filename, invalid type, too large)
+        '''
         validate_uploaded_file(file)
         content = await file.read()
         await file.seek(0)
@@ -99,13 +117,13 @@ class RAGService(IRAGService):
         if await self.document_repo.get_by_hash(file_hash):
             return self._document_error_response(file.filename, "Document already exists")
 
-        document = None
+        document : Optional[ProcessedDocument] = None
         try:
             file_path = await self.file_storage.save(file, stored_name)
             
             validate_file_content(file_path, file.filename)
             
-            document : ProcessedDocument  = await self.document_repo.create(doc_id, file.filename, file_hash, stored_name)
+            document  = await self.document_repo.create(doc_id, file.filename, file_hash, stored_name)
             file_type : str = get_file_extension(file.filename)
             chunks : List[DocumentChunk] = await self._process_chunks(file_path, file_type, document)
             

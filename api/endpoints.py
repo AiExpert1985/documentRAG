@@ -4,8 +4,6 @@ from typing import List, Dict
 
 from fastapi import APIRouter, UploadFile, File, HTTPException, Depends, Request
 from fastapi.responses import FileResponse
-from sqlalchemy.ext.asyncio import AsyncSession
-from database.dependencies import get_db
 
 from config import settings
 from core.interfaces import IMessageRepository, IRAGService
@@ -28,8 +26,8 @@ async def upload_document(
 
 @router.post("/search", response_model=SearchResponse)
 async def search_endpoint(
-    request: Request, # CHANGED: Added Request object
-    chat_request: ChatRequest, # CHANGED: Renamed original request body
+    request: Request, 
+    chat_request: ChatRequest, 
     rag_service: IRAGService = Depends(get_rag_service)
 ) -> SearchResponse:
     if not 3 <= len(chat_request.question) <= 2000:
@@ -45,7 +43,6 @@ async def search_endpoint(
             detail="Please upload a document first"
         )
     
-    # --- FIX #6: USE CONFIG FOR TOP_K ---
     results = await rag_service.search(chat_request.question, top_k=settings.DEFAULT_SEARCH_RESULTS)
     
     base_url = str(request.base_url)
@@ -53,13 +50,11 @@ async def search_endpoint(
     
     for result in results:
         content = result.chunk.content
-        # --- FIX #6: USE CONFIG FOR SNIPPET LENGTH ---
         content_snippet = (
             content[:settings.SNIPPET_LENGTH] + "..." 
             if len(content) > settings.SNIPPET_LENGTH 
             else content
         )
-        # ---------------------------------------------
         
         search_results.append({
             "document_name": result.chunk.metadata.get("document_name", "Unknown"),
@@ -147,13 +142,13 @@ async def get_status(
 
 @router.get("/search-history", response_model=List[Dict])
 async def get_search_history(
-    message_repo: IMessageRepository = Depends(get_message_repository) # Use DI
+    message_repo: IMessageRepository = Depends(get_message_repository) 
 ) -> List[Dict]:
     return await message_repo.get_search_history(limit=50)
 
 @router.delete("/search-history", response_model=DeleteResponse)
 async def clear_search_history(
-    message_repo: IMessageRepository = Depends(get_message_repository) # Use DI
+    message_repo: IMessageRepository = Depends(get_message_repository)
 ) -> DeleteResponse:
     success = await message_repo.clear_history()
     if success:
@@ -162,7 +157,6 @@ async def clear_search_history(
             message="Search history cleared successfully"
         )
     raise HTTPException(status_code=500, detail="Failed to clear search history")
-# ---------------------------------
 
 
 @router.get("/config")
