@@ -21,7 +21,9 @@ class BaseOCRProcessor(IDocumentProcessor):
     def __init__(self, pdf_converter: IPdfToImageConverter = None, chunk_size: int = 1000, chunk_overlap: int = 200):
         self.pdf_converter = pdf_converter
         self.text_splitter = RecursiveCharacterTextSplitter(
-            chunk_size=chunk_size, chunk_overlap=chunk_overlap
+            chunk_size=chunk_size,
+            chunk_overlap=chunk_overlap,
+            separators=["\n\n", "\n", ".", "،", " ", ""]  # Add Arabic comma
         )
 
     @abstractmethod
@@ -123,15 +125,15 @@ class BaseOCRProcessor(IDocumentProcessor):
             raise ValueError("No text extracted from document")
         
         print("Before split")
-        for doc in docs:
-            print(doc)
+        for i, doc in enumerate(docs):
+            print(f"{i} - {doc}")
         
         # Split into chunks
         split_docs = self.text_splitter.split_documents(docs)
 
         print("After split")
-        for doc in docs:
-            print(doc)
+        for i, doc in enumerate(docs):
+            print(f"{i} - {doc}")
 
         logger.info(f"✓ Successfully processed document")
         return [
@@ -180,9 +182,16 @@ class PaddleOCRProcessor(BaseOCRProcessor):
     async def _extract_text_from_image(self, image: Image.Image) -> str:
         img_bytes = io.BytesIO()
         image.save(img_bytes, format='PNG')
-        result = await asyncio.to_thread(self.ocr_engine.ocr, img_bytes.getvalue(), cls=True)
+        
+        result = await asyncio.to_thread(
+            self.ocr_engine.predict, img_bytes.getvalue()
+        )
+        
+        print(f"PaddleOCR raw result: {result}")  # See what it returns
         
         if not result or not result[0]:
             return ""
         
-        return "\n".join(line[1][0] for line in result[0])
+        text = "\n".join(line[1][0] for line in result[0])
+        print(f"Extracted text length: {len(text)}")
+        return text
