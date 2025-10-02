@@ -1,6 +1,7 @@
 # services/logger_config.py
 import logging
 from logging.handlers import RotatingFileHandler
+import os
 from config import settings 
 
 def setup_logging():
@@ -14,7 +15,7 @@ def setup_logging():
     if logger.hasHandlers():
         logger.handlers.clear()
 
-    logger.setLevel(logging.DEBUG)  # Set the minimum level to process
+    logger.setLevel(logging.INFO)  # Set the minimum level to process
 
     formatter = logging.Formatter(
         '%(asctime)s - %(name)s - %(levelname)s - [%(filename)s:%(lineno)d] - %(message)s'
@@ -22,6 +23,11 @@ def setup_logging():
 
     # File Handler: Rotates logs to prevent large files.
     try:
+
+        log_dir = os.path.dirname(settings.LOG_FILE_PATH)
+        if log_dir and not os.path.exists(log_dir):
+            os.makedirs(log_dir, exist_ok=True)
+
         file_handler = RotatingFileHandler(
             settings.LOG_FILE_PATH,
             maxBytes=5 * 1024 * 1024,  # 5MB

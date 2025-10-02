@@ -23,7 +23,16 @@ class BaseOCRProcessor(IDocumentProcessor):
         self.text_splitter = RecursiveCharacterTextSplitter(
             chunk_size=chunk_size,
             chunk_overlap=chunk_overlap,
-            separators=["\n\n", "\n", ".", "،", " ", ""]  # Add Arabic comma
+            separators=[
+                "\n\n",   # Separate paragraphs first (strongest separator)
+                "\n",     # Separate lines 
+                " ",      # Separate spaces (if needed, but usually last)
+                ".",      # Separate sentences
+                "؟",      # Arabic question mark (new)
+                "!",      # Exclamation mark (new)
+                "،",      # Arabic comma
+                ""        # Fallback to character split
+            ] 
         )
 
     @abstractmethod
@@ -115,11 +124,19 @@ class BaseOCRProcessor(IDocumentProcessor):
                 )
             except asyncio.TimeoutError:
                 raise ValueError(f"OCR timeout on page {i+1} after {settings.OCR_TIMEOUT_SECONDS}s")
-            if text.strip():  # Only add non-empty text
-                docs.append(LangchainDocument(
-                    page_content=text,
-                    metadata={"page": i + 1, "source": file_path}
-                ))
+            
+            # This ensures the splitter treats bullet points as separate documents.
+            # Split the page text by strong separators (paragraph breaks)
+            page_sections = text.split('\n\n')
+            
+            for section in page_sections:
+                cleaned_section = section.strip()
+                if cleaned_section:
+                    docs.append(LangchainDocument(
+                        page_content=cleaned_section,
+                        # We keep the metadata per section
+                        metadata={"page": i + 1, "source": file_path} 
+                    ))
 
         if not docs:
             raise ValueError("No text extracted from document")
@@ -162,6 +179,7 @@ class EasyOCRProcessor(BaseOCRProcessor):
                 raise ImportError("EasyOCR not installed. Run: pip install easyocr")
 
     async def _extract_text_from_image(self, image: Image.Image) -> str:
+        logger.info('Using EasyOCRProcessor')
         img_bytes = io.BytesIO()
         image.save(img_bytes, format='PNG')
         result = await asyncio.to_thread(
@@ -173,6 +191,7 @@ class PaddleOCRProcessor(BaseOCRProcessor):
     ocr_engine = None
             
     async def _extract_text_from_image(self, image: Image.Image) -> str:
+        logger.info('Using PaddleOCRProcessor')
         import numpy as np
         
         img_array = np.array(image)
@@ -216,6 +235,7 @@ class TesseractProcessor(BaseOCRProcessor):
             raise ImportError("Tesseract not installed")
 
     async def _extract_text_from_image(self, image: Image.Image) -> str:
+        logger.info('Using TesseractProcessor')
         import pytesseract
         text = await asyncio.to_thread(
             pytesseract.image_to_string, image, lang='ara+eng'
