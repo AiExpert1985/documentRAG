@@ -132,7 +132,7 @@ class BaseOCRProcessor(IDocumentProcessor):
         split_docs = self.text_splitter.split_documents(docs)
 
         print("After split")
-        for i, doc in enumerate(docs):
+        for i, doc in enumerate(split_docs):  # Correct
             print(f"{i} - {doc}")
 
         logger.info(f"✓ Successfully processed document")
@@ -168,14 +168,6 @@ class EasyOCRProcessor(BaseOCRProcessor):
 
 class PaddleOCRProcessor(BaseOCRProcessor):
     ocr_engine = None
-
-    async def _extract_text_from_image(self, image: Image.Image) -> str:
-        img_bytes = io.BytesIO()
-        image.save(img_bytes, format='PNG')
-        result = await asyncio.to_thread(
-            self.reader.readtext, img_bytes.getvalue(), detail=0, paragraph=False
-        )
-        return "\n".join(result) if result else ""
             
     async def _extract_text_from_image(self, image: Image.Image) -> str:
         import numpy as np
