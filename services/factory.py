@@ -10,6 +10,7 @@ from core.interfaces import (
     IRAGService, IVectorStore, IEmbeddingService, 
     IDocumentRepository, IMessageRepository, IFileStorage
 )
+from infrastructure.faiss_store import FAISSVectorStore
 from infrastructure.vector_stores import ChromaDBVectorStore
 from infrastructure.embedding_services import SentenceTransformerEmbedding
 from infrastructure.repositories import SQLDocumentRepository, SQLMessageRepository
@@ -23,7 +24,10 @@ def get_vector_store() -> IVectorStore:
     if settings.VECTOR_STORE_TYPE == "chromadb":
         client = chromadb.PersistentClient(path=settings.VECTOR_DB_PATH)
         return ChromaDBVectorStore(client)
-    # Future: elif settings.VECTOR_STORE_TYPE == "pinecone":
+    elif settings.VECTOR_STORE_TYPE.lower() == "faiss":
+        # Pass the configured path to the FAISS store
+        return FAISSVectorStore(index_path=settings.VECTOR_DB_PATH)
+    # Future: elif settings.VECTOR_STORE_TYPE.lower() == "pinecone":
     #     return PineconeVectorStore(...)
     else:
         raise ValueError(f"Unknown vector store type: {settings.VECTOR_STORE_TYPE}")
