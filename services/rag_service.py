@@ -14,8 +14,9 @@ from core.interfaces import (
 from core.models import ChunkSearchResult, ProcessedDocument
 from services.document_processor_factory import DocumentProcessorFactory
 from utils.helpers import get_file_extension, get_file_hash, sanitize_filename, validate_file_content, validate_uploaded_file
+from config import settings
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger(settings.LOGGER_NAME)
 
 class RAGService(IRAGService):
     def __init__(
@@ -63,7 +64,7 @@ class RAGService(IRAGService):
         stored_name = f"{doc_id}{safe_suffix}"
         
 
-        logger.info(f"✓ file is prepared (validation, hash, and secure filename)")
+        logger.info(f"file is prepared (validation, hash, and secure filename)")
         return get_file_hash(content), doc_id, stored_name
 
     async def _process_chunks(self, file_path: str, file_type: str, document) -> List[DocumentChunk]:

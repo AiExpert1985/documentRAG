@@ -34,10 +34,12 @@ def setup_logging():
             backupCount=5
         )
         file_handler.setFormatter(formatter)
-        file_handler.setLevel(logging.INFO)  # Log INFO and above to the file
+        logger.setLevel(logging.DEBUG)  # Log INFO and above to the file
         logger.addHandler(file_handler)
     except Exception as e:
         print(f"Error setting up file logger: {e}")
+
+    logger.propagate = True
 
     # Console Handler: For immediate feedback during development.
     console_handler = logging.StreamHandler()

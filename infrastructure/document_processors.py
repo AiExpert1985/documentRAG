@@ -15,7 +15,7 @@ from core.interfaces import IDocumentProcessor, DocumentChunk, IPdfToImageConver
 from config import settings
 
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger(settings.LOGGER_NAME)
 
 class BaseOCRProcessor(IDocumentProcessor):
     def __init__(self, pdf_converter: IPdfToImageConverter = None, chunk_size: int = 1000, chunk_overlap: int = 200):
@@ -127,16 +127,22 @@ class BaseOCRProcessor(IDocumentProcessor):
             
             # This ensures the splitter treats bullet points as separate documents.
             # Split the page text by strong separators (paragraph breaks)
-            page_sections = text.split('\n\n')
-            
-            for section in page_sections:
-                cleaned_section = section.strip()
-                if cleaned_section:
-                    docs.append(LangchainDocument(
-                        page_content=cleaned_section,
-                        # We keep the metadata per section
-                        metadata={"page": i + 1, "source": file_path} 
-                    ))
+            if text.strip(): 
+                # Split the page text by strong separators (paragraph breaks)
+                # This logic relies on EasyOCR's output having \n\n breaks
+                page_sections = text.split('\n\n')
+                
+                for section in page_sections:
+                    cleaned_section = section.strip()
+                    
+                    MIN_CHUNK_LENGTH = 30 # Define a reasonable minimum length
+                    
+                    if len(cleaned_section) >= MIN_CHUNK_LENGTH:
+                        docs.append(LangchainDocument(
+                            page_content=cleaned_section,
+                            metadata={"page": i + 1, "source": file_path} 
+                        ))
+
 
         if not docs:
             raise ValueError("No text extracted from document")
@@ -155,7 +161,7 @@ class BaseOCRProcessor(IDocumentProcessor):
         for i, doc in enumerate(split_docs):
             print(f"{i} - Length: {len(doc.page_content)} chars")
 
-        logger.info(f"✓ Successfully processed document")
+        logger.info(f"Successfully processed document")
         return [
             DocumentChunk(
                 id=f"{uuid.uuid4()}_{i}",
@@ -183,9 +189,10 @@ class EasyOCRProcessor(BaseOCRProcessor):
         img_bytes = io.BytesIO()
         image.save(img_bytes, format='PNG')
         result = await asyncio.to_thread(
-            self.reader.readtext, img_bytes.getvalue(), detail=0, paragraph=True
+            self.reader.readtext, img_bytes.getvalue(), detail=0 
         )
-        return "\n".join(result) if result else ""
+        # We join every detected line/region with a strong paragraph break (double newline).
+        return "\n\n".join(result) if result else "" 
 
 class PaddleOCRProcessor(BaseOCRProcessor):
     ocr_engine = None

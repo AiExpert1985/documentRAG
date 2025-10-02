@@ -10,7 +10,7 @@ from fastapi import UploadFile, HTTPException
 import logging
 from config import settings
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger(settings.LOGGER_NAME)
 
 def validate_file_exists(file: UploadFile) -> None:
     """Validate file has a filename."""
@@ -77,7 +77,7 @@ def validate_file_content(file_path: str, filename: str) -> None:
     elif extension == '.png' and not header.startswith(b'\x89PNG'):
         raise HTTPException(status_code=400, detail="Invalid PNG file")
     
-    logger.info(f"✓ Successfully validated file content")
+    logger.info(f"Successfully validated file content")
 
 def validate_uploaded_file(file: UploadFile) -> None:
     """Complete file validation."""

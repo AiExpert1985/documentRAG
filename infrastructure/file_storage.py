@@ -7,7 +7,9 @@ from typing import Optional
 from fastapi import UploadFile
 from core.interfaces import IFileStorage
 
-logger = logging.getLogger(__name__)
+from config import settings
+
+logger = logging.getLogger(settings.LOGGER_NAME)
 
 class LocalFileStorage(IFileStorage):
     """Concrete implementation for storing files on the local disk."""
@@ -29,7 +31,7 @@ class LocalFileStorage(IFileStorage):
             with open(file_path, "wb") as buffer:
                 content = await file.read()
                 buffer.write(content)
-            logger.info(f"✓ Successfully saved file to {file_path}")
+            logger.info(f"Successfully saved file to {file_path}")
             return str(file_path)
         except Exception as e:
             logger.error(f"Failed to save file to {file_path}: {e}")

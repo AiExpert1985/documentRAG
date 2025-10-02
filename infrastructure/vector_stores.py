@@ -9,7 +9,9 @@ from chromadb.utils.embedding_functions import SentenceTransformerEmbeddingFunct
 from core.interfaces import IVectorStore, DocumentChunk
 from core.models import ChunkSearchResult
 
-logger = logging.getLogger(__name__)
+from config import settings
+
+logger = logging.getLogger(settings.LOGGER_NAME)
 
 class ChromaDBVectorStore(IVectorStore):
     """ChromaDB implementation of vector store"""
