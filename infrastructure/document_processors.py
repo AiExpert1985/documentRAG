@@ -169,29 +169,42 @@ class EasyOCRProcessor(BaseOCRProcessor):
 class PaddleOCRProcessor(BaseOCRProcessor):
     ocr_engine = None
 
-    def __init__(self, pdf_converter: IPdfToImageConverter = None, **kwargs):
-        super().__init__(pdf_converter, **kwargs)
-        if PaddleOCRProcessor.ocr_engine is None:
-            try:
-                from paddleocr import PaddleOCR
-                lang = next((l for l in settings.OCR_LANGUAGES if l != 'en'), 'en')
-                PaddleOCRProcessor.ocr_engine = PaddleOCR(use_angle_cls=True, lang=lang)
-            except ImportError:
-                raise ImportError("PaddleOCR not installed. Run: pip install paddleocr paddlepaddle")
-
     async def _extract_text_from_image(self, image: Image.Image) -> str:
         img_bytes = io.BytesIO()
         image.save(img_bytes, format='PNG')
+        result = await asyncio.to_thread(
+            self.reader.readtext, img_bytes.getvalue(), detail=0, paragraph=False
+        )
+        return "\n".join(result) if result else ""
+            
+    async def _extract_text_from_image(self, image: Image.Image) -> str:
+        import numpy as np
+        
+        img_array = np.array(image)
         
         result = await asyncio.to_thread(
-            self.ocr_engine.predict, img_bytes.getvalue()
+            self.ocr_engine.ocr, img_array
         )
         
-        print(f"PaddleOCR raw result: {result}")  # See what it returns
+        print(f"PaddleOCR raw result type: {type(result)}")
+        print(f"PaddleOCR raw result: {result}")
         
-        if not result or not result[0]:
+        if not result:
             return ""
         
-        text = "\n".join(line[1][0] for line in result[0])
+        # PaddleOCR returns different structure - adapt based on actual output
+        try:
+            # Try to extract text - structure might be different
+            if isinstance(result, list) and len(result) > 0:
+                if result[0] is None:
+                    return ""
+                text = "\n".join(line[1][0] for line in result[0])
+            else:
+                return ""
+        except (IndexError, TypeError) as e:
+            print(f"Failed to parse PaddleOCR result: {e}")
+            print(f"Result structure: {result}")
+            return ""
+        
         print(f"Extracted text length: {len(text)}")
         return text

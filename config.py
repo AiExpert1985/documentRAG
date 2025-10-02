@@ -22,14 +22,14 @@ class Settings(BaseSettings):
     EMBEDDING_MODEL_NAME: str = "paraphrase-multilingual-mpnet-base-v2"
     
     # Document processing
-    CHUNK_SIZE: int = 1000
-    CHUNK_OVERLAP: int = 200
+    CHUNK_SIZE: int = 200
+    CHUNK_OVERLAP: int = 50
     MAX_FILE_SIZE: int = 50 * 1024 * 1024
     UPLOADS_DIR: str = f"{get_project_root()}/uploads"
     
     # PDF processing method selection
     PDF_PROCESSING_METHOD: str = "ocr"
-    OCR_ENGINE: str = "paddleocr"
+    OCR_ENGINE: str = "easyocr"
     OCR_DPI: int = 300
     OCR_LANGUAGES: List[str] = ["ar", "en"]
     
