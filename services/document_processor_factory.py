@@ -4,7 +4,8 @@ from typing import Dict, Type
 from core.interfaces import IDocumentProcessor, IPdfToImageConverter
 from infrastructure.document_processors import (
     EasyOCRProcessor, 
-    PaddleOCRProcessor
+    PaddleOCRProcessor,
+    TesseractProcessor
 )
 from config import settings
 from infrastructure.pdf_converters import PyMuPDFConverter
@@ -15,7 +16,8 @@ class DocumentProcessorFactory:
     def __init__(self, pdf_converter_class=None):
         self._ocr_strategies: Dict[str, Type[IDocumentProcessor]] = {
             "easyocr": EasyOCRProcessor,
-            "paddleocr": PaddleOCRProcessor
+            "paddleocr": PaddleOCRProcessor,
+            "tesseract": TesseractProcessor  # Add this
         }
         self.pdf_converter_class = pdf_converter_class or PyMuPDFConverter
 

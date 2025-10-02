@@ -126,14 +126,17 @@ class BaseOCRProcessor(IDocumentProcessor):
         
         print("Before split")
         for i, doc in enumerate(docs):
-            print(f"{i} - {doc}")
-        
-        # Split into chunks
+            print(f"{i} - Length: {len(doc.page_content)} chars")
+
         split_docs = self.text_splitter.split_documents(docs)
 
+        print(f"Text length: {len(docs[0].page_content)}")
+        print(f"Chunk size setting: {self.text_splitter._chunk_size}")
+        print(f"Chunks created: {len(split_docs)}")
+
         print("After split")
-        for i, doc in enumerate(split_docs):  # Correct
-            print(f"{i} - {doc}")
+        for i, doc in enumerate(split_docs):
+            print(f"{i} - Length: {len(doc.page_content)} chars")
 
         logger.info(f"✓ Successfully processed document")
         return [
@@ -199,4 +202,22 @@ class PaddleOCRProcessor(BaseOCRProcessor):
             return ""
         
         print(f"Extracted text length: {len(text)}")
+        return text
+    
+
+class TesseractProcessor(BaseOCRProcessor):
+    def __init__(self, pdf_converter: IPdfToImageConverter = None, **kwargs):
+        super().__init__(pdf_converter, **kwargs)
+        try:
+            import pytesseract
+            # Set path if needed (Windows)
+            # pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
+        except ImportError:
+            raise ImportError("Tesseract not installed")
+
+    async def _extract_text_from_image(self, image: Image.Image) -> str:
+        import pytesseract
+        text = await asyncio.to_thread(
+            pytesseract.image_to_string, image, lang='ara+eng'
+        )
         return text

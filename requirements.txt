@@ -12,3 +12,4 @@ paddleocr
 PyMuPDF
 pillow
 uvicorn
+pytesseract
