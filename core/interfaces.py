@@ -45,11 +45,6 @@ class IDocumentProcessor(ABC):
     async def process(self, file_path: str, file_type: str) -> List[DocumentChunk]:
         """Process document and return chunks"""
         pass
-    
-    @abstractmethod
-    async def validate(self, file_path: str, file_type: str) -> bool:
-        """Validate if document can be processed"""
-        pass
 
 # ============= Embedding Service Interface =============
 class IEmbeddingService(ABC):

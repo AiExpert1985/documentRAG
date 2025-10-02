@@ -5,8 +5,12 @@ import re
 import os
 from pathlib import Path
 
-from fastapi import UploadFile, HTTPException, logger
+from fastapi import UploadFile, HTTPException
+
+import logging
 from config import settings
+
+logger = logging.getLogger(__name__)
 
 def validate_file_exists(file: UploadFile) -> None:
     """Validate file has a filename."""

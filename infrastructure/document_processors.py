@@ -7,12 +7,15 @@ from typing import List
 from PIL import Image
 import io
 
-from fastapi import logger
+import logging
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain_core.documents import Document as LangchainDocument
 
 from core.interfaces import IDocumentProcessor, DocumentChunk, IPdfToImageConverter
 from config import settings
+
+
+logger = logging.getLogger(__name__)
 
 class BaseOCRProcessor(IDocumentProcessor):
     def __init__(self, pdf_converter: IPdfToImageConverter = None, chunk_size: int = 1000, chunk_overlap: int = 200):
