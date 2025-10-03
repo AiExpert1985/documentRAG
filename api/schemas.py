@@ -1,17 +1,16 @@
 # api/schemas.py
-from pydantic import BaseModel
-from typing import Optional, List, Dict
 from pydantic import BaseModel, HttpUrl
-
+from typing import Optional, List, Dict
+from enum import Enum
 
 class Message(BaseModel):
     sender: str
     content: str
-    
+
 class DocumentsListItem(BaseModel):
     id: str
     filename: str
-    download_url: HttpUrl # CHANGED
+    download_url: HttpUrl
 
 class ChatRequest(BaseModel):
     question: str
@@ -21,7 +20,7 @@ class SearchResult(BaseModel):
     page_number: int
     content_snippet: str
     document_id: str
-    download_url: HttpUrl # ADD THIS LINE
+    download_url: HttpUrl
 
 class SearchResponse(BaseModel):
     status: str
@@ -29,14 +28,34 @@ class SearchResponse(BaseModel):
     results: List[SearchResult]
     total_results: int
 
+# NEW: Error codes for clear user feedback
+class ErrorCode(str, Enum):
+    FILE_TOO_LARGE = "FILE_TOO_LARGE"
+    INVALID_FORMAT = "INVALID_FORMAT"
+    DUPLICATE_FILE = "DUPLICATE_FILE"
+    NO_TEXT_FOUND = "NO_TEXT_FOUND"
+    PROCESSING_FAILED = "PROCESSING_FAILED"
+    OCR_TIMEOUT = "OCR_TIMEOUT"
+
+# NEW: Processing status enum
+class ProcessingStatus(str, Enum):
+    PENDING = "pending"
+    VALIDATING = "validating"
+    EXTRACTING_TEXT = "extracting_text"
+    GENERATING_EMBEDDINGS = "generating_embeddings"
+    STORING = "storing"
+    COMPLETED = "completed"
+    FAILED = "failed"
+
 class ProcessDocumentResponse(BaseModel):
-    status: str # processing operation succeeded or failed
+    status: str
     filename: str
     document_id: str
     chunks: int
     pages: int
     message: Optional[str] = None
     error: Optional[str] = None
+    error_code: Optional[ErrorCode] = None  # NEW
 
 class StatusResponse(BaseModel):
     document_loaded: Optional[str] = None
@@ -49,3 +68,13 @@ class DocumentsListResponse(BaseModel):
 class DeleteResponse(BaseModel):
     status: str
     message: str
+
+# NEW: Progress tracking response
+class ProcessingProgress(BaseModel):
+    document_id: str
+    filename: str
+    status: ProcessingStatus
+    progress_percent: int  # 0-100
+    current_step: str
+    error: Optional[str] = None
+    error_code: Optional[ErrorCode] = None

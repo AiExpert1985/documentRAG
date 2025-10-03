@@ -14,6 +14,9 @@ from api.schemas import (
 )
 from utils.helpers import validate_document_id
 
+from api.schemas import ProcessingProgress  # NEW
+from infrastructure.progress_store import progress_store  # NEW
+
 
 router = APIRouter()
 
@@ -165,3 +168,21 @@ async def get_config():
         "allowed_extensions": settings.ALLOWED_FILE_EXTENSIONS,
         "max_file_size_mb": settings.MAX_FILE_SIZE // (1024 * 1024)
     }
+
+
+# NEW: Progress tracking endpoint
+@router.get("/processing-status/{document_id}", response_model=ProcessingProgress)
+async def get_processing_status(document_id: str) -> ProcessingProgress:
+    """Get real-time processing progress for a document"""
+    progress = progress_store.get(document_id)
+    
+    if not progress:
+        raise HTTPException(
+            status_code=404, 
+            detail="No processing status found for this document"
+        )
+    
+    return ProcessingProgress(
+        document_id=document_id,
+        **progress
+    )
