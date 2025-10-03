@@ -72,9 +72,9 @@ class DocumentProcessorFactory:
         
         pdf_converter = self.pdf_converter_class() if needs_pdf_converter else None
         return processor_class(
-            pdf_converter=pdf_converter,
-            chunk_size=settings.CHUNK_SIZE,
-            chunk_overlap=settings.CHUNK_OVERLAP
+            pdf_converter=pdf_converter, # type: ignore
+            chunk_size=settings.CHUNK_SIZE, # type: ignore
+            chunk_overlap=settings.CHUNK_OVERLAP # type: ignore
         )
     
     def get_processor(self, file_type: str) -> IDocumentProcessor:

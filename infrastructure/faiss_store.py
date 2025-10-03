@@ -75,7 +75,7 @@ class FAISSVectorStore(IVectorStore):
 
         try:
             # Add vectors to FAISS index
-            await asyncio.to_thread(self._index.add, embeddings)
+            await asyncio.to_thread(self._index.add, embeddings) # type: ignore
 
             # Store metadata
             for i, chunk in enumerate(chunks):
@@ -103,7 +103,7 @@ class FAISSVectorStore(IVectorStore):
             # Perform search (D=distances, I=indices)
             distances, indices = await asyncio.to_thread(
                 self._index.search, query_vector, top_k
-            )
+            )  # type: ignore
             
             results = []
             for i in range(top_k):

@@ -14,8 +14,8 @@ from api.schemas import (
 )
 from utils.helpers import validate_document_id
 
-from api.schemas import ProcessingProgress  # NEW
-from infrastructure.progress_store import progress_store  # NEW
+from api.schemas import ProcessingProgress
+from infrastructure.progress_store import progress_store
 
 
 router = APIRouter()

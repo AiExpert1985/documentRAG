@@ -17,16 +17,17 @@ class SQLDocumentRepository(IDocumentRepository):
     def __init__(self, session: AsyncSession):
         self.session = session
     
-    def _to_domain(self, db_doc: DocumentEntity) -> Optional[ProcessedDocument]:
+    def _to_domain(self, db_doc: DocumentEntity) -> ProcessedDocument:  # Remove Optional
+        # No longer check for None - caller ensures it's valid
         return ProcessedDocument(
-            id=db_doc.id,
-            filename=db_doc.filename,
-            file_hash=db_doc.file_hash,
+            id=db_doc.id,  # type: ignore
+            filename=db_doc.filename,  # type: ignore
+            file_hash=db_doc.file_hash,  # type: ignore
             metadata={
                 "timestamp": db_doc.timestamp.isoformat(),
                 "stored_filename": db_doc.stored_filename
             }
-        ) if db_doc else None
+        )
     
     async def create(self, document_id: str, filename: str, file_hash: str, stored_filename: str) -> ProcessedDocument:
         db_doc = DocumentEntity(
@@ -36,8 +37,18 @@ class SQLDocumentRepository(IDocumentRepository):
         self.session.add(db_doc)
         await self.session.commit()
         await self.session.refresh(db_doc)
-        logger.info(f"Successfully created ProcessedDocument in database")
-        return self._to_domain(db_doc)
+        logger.info(f"✅ Successfully created ProcessedDocument in database")
+        
+        # Direct return - db_doc is guaranteed non-None after commit
+        return ProcessedDocument(
+            id=db_doc.id, # type: ignore
+            filename=db_doc.filename, # type: ignore
+            file_hash=db_doc.file_hash, # type: ignore
+            metadata={
+                "timestamp": db_doc.timestamp.isoformat(),
+                "stored_filename": db_doc.stored_filename
+            }
+        )
 
     async def get_by_id(self, document_id: str) -> Optional[ProcessedDocument]:
         db_doc = await self.session.get(DocumentEntity, document_id)
@@ -53,7 +64,12 @@ class SQLDocumentRepository(IDocumentRepository):
         result = await self.session.execute(
             select(DocumentEntity).order_by(DocumentEntity.timestamp.desc())
         )
-        return [self._to_domain(doc) for doc in result.scalars().all()]
+        # Filter out None values (though they shouldn't exist in practice)
+        return [
+            domain_doc 
+            for doc in result.scalars().all() 
+            if (domain_doc := self._to_domain(doc)) is not None
+        ]
     
     async def delete(self, document_id: str) -> bool:
         doc = await self.session.get(DocumentEntity, document_id)

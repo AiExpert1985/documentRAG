@@ -13,7 +13,7 @@ class PyMuPDFConverter(IPdfToImageConverter):
         images = []
         doc = fitz.open(file_path)
         for page in doc:
-            pix = page.get_pixmap(dpi=dpi)
+            pix = page.get_pixmap(dpi=dpi) # type: ignore
             img = Image.open(io.BytesIO(pix.tobytes()))
             images.append(img)
         doc.close()

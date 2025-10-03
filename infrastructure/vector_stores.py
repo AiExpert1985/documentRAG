@@ -3,7 +3,8 @@
 import asyncio
 import logging
 from typing import List, Optional
-from chromadb import Client
+from typing import Any
+import chromadb
 from chromadb.utils.embedding_functions import SentenceTransformerEmbeddingFunction
 
 from core.interfaces import IVectorStore, DocumentChunk
@@ -16,10 +17,10 @@ logger = logging.getLogger(settings.LOGGER_NAME)
 class ChromaDBVectorStore(IVectorStore):
     """ChromaDB implementation of vector store"""
     
-    def __init__(self, client: Client, collection_name: str = "rag_chunks"):
+    def __init__(self, client: Any, collection_name: str = "rag_chunks"):
         self._client = client
         self._collection_name = collection_name
-        self._collection = None
+        self._collection: Any = None
         
     async def _ensure_collection(self):
         """Lazy initialization of collection"""

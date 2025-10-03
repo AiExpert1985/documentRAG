@@ -3,7 +3,7 @@
 from abc import abstractmethod
 import asyncio
 import uuid
-from typing import List
+from typing import Any, List, Optional
 from PIL import Image
 import io
 
@@ -18,7 +18,7 @@ from config import settings
 logger = logging.getLogger(settings.LOGGER_NAME)
 
 class BaseOCRProcessor(IDocumentProcessor):
-    def __init__(self, pdf_converter: IPdfToImageConverter = None, chunk_size: int = 1000, chunk_overlap: int = 200):
+    def __init__(self, pdf_converter: Optional[IPdfToImageConverter] = None, chunk_size: int = 1000, chunk_overlap: int = 200):
         self.pdf_converter = pdf_converter
         self.text_splitter = RecursiveCharacterTextSplitter(
             chunk_size=chunk_size,
@@ -173,9 +173,9 @@ class BaseOCRProcessor(IDocumentProcessor):
         ]
 
 class EasyOCRProcessor(BaseOCRProcessor):
-    reader = None
+    reader: Optional[Any] = None
 
-    def __init__(self, pdf_converter: IPdfToImageConverter = None, **kwargs):
+    def __init__(self, pdf_converter: Optional[IPdfToImageConverter] = None, **kwargs):
         super().__init__(pdf_converter, **kwargs)
         if EasyOCRProcessor.reader is None:
             try:
@@ -185,19 +185,20 @@ class EasyOCRProcessor(BaseOCRProcessor):
                 raise ImportError("EasyOCR not installed. Run: pip install easyocr")
 
     async def _extract_text_from_image(self, image: Image.Image) -> str:
+        assert self.reader is not None, "EasyOCR reader not initialized"
         logger.info('Using EasyOCRProcessor')
         img_bytes = io.BytesIO()
         image.save(img_bytes, format='PNG')
         result = await asyncio.to_thread(
-            self.reader.readtext, img_bytes.getvalue(), detail=0 
+            self.reader.readtext, img_bytes.getvalue(), detail=0, paragraph=True
         )
-        # We join every detected line/region with a strong paragraph break (double newline).
-        return "\n\n".join(result) if result else "" 
+        return "\n".join(result) if result else ""
 
 class PaddleOCRProcessor(BaseOCRProcessor):
-    ocr_engine = None
+    ocr_engine: Optional[Any] = None
             
     async def _extract_text_from_image(self, image: Image.Image) -> str:
+        assert self.ocr_engine is not None, "PaddleOCR engine not initialized"
         logger.info('Using PaddleOCRProcessor')
         import numpy as np
         
@@ -232,7 +233,7 @@ class PaddleOCRProcessor(BaseOCRProcessor):
     
 
 class TesseractProcessor(BaseOCRProcessor):
-    def __init__(self, pdf_converter: IPdfToImageConverter = None, **kwargs):
+    def __init__(self, pdf_converter: Optional[IPdfToImageConverter] = None, **kwargs):
         super().__init__(pdf_converter, **kwargs)
         try:
             import pytesseract

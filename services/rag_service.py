@@ -5,7 +5,8 @@ from pathlib import Path
 from uuid import uuid4
 
 from fastapi import UploadFile, Request, HTTPException
-from api.schemas import ProcessDocumentResponse, ErrorCode, ProcessingStatus
+from pydantic import HttpUrl
+from api.schemas import DocumentsListItem, ProcessDocumentResponse, ErrorCode, ProcessingStatus
 from core.interfaces import (
     IDocumentProcessor, IRAGService, IVectorStore, IEmbeddingService, 
     IDocumentRepository, IMessageRepository, IFileStorage, DocumentChunk
@@ -42,6 +43,8 @@ class RAGService(IRAGService):
     
     async def _validate_and_prepare(self, file: UploadFile) -> Tuple[str, str, str, bytes]:
         """Validate file and generate IDs. Returns (hash, doc_id, stored_name, content)"""
+        if not file.filename:
+            raise ValueError(f"{ErrorCode.INVALID_FORMAT.value}:No filename provided")
         try:
             validate_uploaded_file(file)
         except HTTPException as e:
@@ -76,6 +79,8 @@ class RAGService(IRAGService):
     async def _save_and_validate_file(self, file: UploadFile, stored_name: str) -> str:
         """Save file to disk and validate content"""
         file_path = await self.file_storage.save(file, stored_name)
+        
+        assert file.filename is not None, "Filename should not be None at this point"
         
         try:
             validate_file_content(file_path, file.filename)
@@ -161,7 +166,7 @@ class RAGService(IRAGService):
     
     # ============ ERROR RESPONSE BUILDER ============
     
-    def _build_error_response(self, filename: str, error_msg: str) -> ProcessDocumentResponse:
+    def _build_error_response(self, filename: Optional[str], error_msg: str) -> ProcessDocumentResponse:
         """Build error response with proper error code"""
         if ":" in error_msg:
             code_str, message = error_msg.split(":", 1)
@@ -173,6 +178,16 @@ class RAGService(IRAGService):
         else:
             error_code = ErrorCode.PROCESSING_FAILED
             message = error_msg
+        
+        return ProcessDocumentResponse(
+            status="error",
+            filename=filename or "unknown",  # Handle None case
+            document_id="",
+            chunks=0,
+            pages=0,
+            error=message,
+            error_code=error_code
+        )
         
         return ProcessDocumentResponse(
             status="error",
@@ -237,6 +252,10 @@ class RAGService(IRAGService):
         try:
             # Step 1: Fast validation and file save
             file_hash, doc_id, stored_name, _ = await self._validate_and_prepare(file)
+            
+            # Assert filename is not None (validated in _validate_and_prepare)
+            assert file.filename is not None
+            
             progress_store.start(doc_id, file.filename)
             progress_store.update(doc_id, ProcessingStatus.VALIDATING, 10, "Validating file...")
             
@@ -334,15 +353,18 @@ class RAGService(IRAGService):
             logger.error(f"Document deletion failed: {e}")
             return False
             
-    async def list_documents(self, request: Request) -> List[Dict[str, str]]:
+    async def list_documents(self, request: Request) -> List[DocumentsListItem]:
         """List all documents, including download URLs"""
         documents = await self.document_repo.list_all()
         base_url = str(request.base_url)
-        return [{
-            "id": doc.id, 
-            "filename": doc.filename,
-            "download_url": f"{base_url}download/{doc.id}"
-        } for doc in documents]
+        return [
+            DocumentsListItem(
+                id=doc.id,
+                filename=doc.filename,
+                download_url=HttpUrl(f"{base_url}download/{doc.id}")
+            )
+            for doc in documents
+        ]
         
     async def get_document_with_path(self, document_id: str) -> Optional[Dict[str, Any]]:
         """Get a document's details and its physical file path"""

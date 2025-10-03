@@ -5,7 +5,7 @@ from typing import List, Dict, Any, Optional
 from dataclasses import dataclass
 from fastapi import UploadFile, Request
 
-from api.schemas import ProcessDocumentResponse
+from api.schemas import DocumentsListItem, ProcessDocumentResponse
 from core.models import ChunkSearchResult, DocumentChunk, ProcessedDocument 
 
 # ============= Vector Store Interface =============
@@ -201,10 +201,51 @@ class IFileStorage(ABC):
 # ============= Service Layer Interfaces =============
 class IRAGService(ABC):
     """High-level RAG operations interface"""
+
+    @abstractmethod
+    async def get_status(self) -> Dict[str, Any]:
+        """Get system status"""
+        pass
     
     @abstractmethod
     async def process_document(self, file: UploadFile) -> ProcessDocumentResponse:
-        """Process and store a document from an UploadFile object."""
+        """
+        Starts async document processing and returns immediately (< 1 second).
+        
+        Fast Path (synchronous):
+            1. Validates file (size, type, format)
+            2. Checks for duplicates (SHA256 hash)
+            3. Saves file to disk
+            4. Submits to background processor
+            5. Returns with document_id for progress tracking
+        
+        Slow Path (background thread):
+            - OCR text extraction (30s - 5min)
+            - Embedding generation
+            - Vector storage in ChromaDB
+        
+        Args:
+            file: UploadFile (PDF, JPG, PNG, max 50MB)
+        
+        Returns:
+            ProcessDocumentResponse with:
+            - status: "processing" or "error"
+            - document_id: UUID for polling /processing-status/{document_id}
+            - error_code: FILE_TOO_LARGE, INVALID_FORMAT, DUPLICATE_FILE, etc.
+        
+        Error Handling:
+            Validation failures return immediately with error_code.
+            Processing failures tracked via ProgressStore.
+            Auto-cleanup on any failure (file, DB, vectors).
+        
+        Concurrency:
+            Handles 3 concurrent uploads via ThreadPoolExecutor.
+        
+        Example:
+            response = await rag_service.process_document(file)
+            # Returns: {"status": "processing", "document_id": "abc-123"}
+            # Poll: GET /processing-status/abc-123
+        """
         pass
 
     @abstractmethod
@@ -223,7 +264,7 @@ class IRAGService(ABC):
         pass
         
     @abstractmethod
-    async def list_documents(self, request: Request) -> List[Dict[str, str]]:
+    async def list_documents(self, request: Request) -> List[DocumentsListItem]:
         """List all documents, including download URLs."""
         pass
         
@@ -237,6 +278,6 @@ class IPdfToImageConverter(ABC):
     """Interface for PDF to image conversion"""
 
     @abstractmethod
-    def convert(self, file_path: str) -> List[Any]:
+    def convert(self, file_path: str, dpi: int = 300) -> List[Any]:
         """Converts a PDF file to a list of images."""
         pass

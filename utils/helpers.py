@@ -19,6 +19,9 @@ def validate_file_exists(file: UploadFile) -> None:
 
 def validate_file_type(file: UploadFile) -> None:
     """Validate file type is supported."""
+    if not file.filename:
+        raise HTTPException(status_code=400, detail="No filename provided")
+    
     file_extension = file.filename.lower().split('.')[-1]
     if file_extension not in settings.ALLOWED_FILE_EXTENSIONS:
         raise HTTPException(
