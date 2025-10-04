@@ -1,7 +1,7 @@
 # core/interfaces.py
 """Core interfaces for the RAG system"""
 from abc import ABC, abstractmethod
-from typing import List, Dict, Any, Optional
+from typing import Callable, List, Dict, Any, Optional
 from dataclasses import dataclass
 from fastapi import UploadFile, Request
 
@@ -39,10 +39,13 @@ class IVectorStore(ABC):
 
 # ============= Document Processor Interface =============
 class IDocumentProcessor(ABC):
-    """Interface for document processing"""
-    
     @abstractmethod
-    async def process(self, file_path: str, file_type: str) -> List[DocumentChunk]:
+    async def process(
+        self, 
+        file_path: str, 
+        file_type: str,
+        progress_callback: Optional[Callable[[int, int], None]] = None
+    ) -> List[DocumentChunk]:
         """Process document and return chunks"""
         pass
 

@@ -100,20 +100,36 @@ class RAGService(IRAGService):
         return file_path
     
     # ============ DOCUMENT PROCESSING ============
-    
+
     async def _extract_and_embed_chunks(
         self, file_path: str, file_type: str, document: ProcessedDocument, doc_id: str
     ) -> List[DocumentChunk]:
-        """Extract text and generate embeddings"""
-        progress_store.update(doc_id, ProcessingStatus.EXTRACTING_TEXT, 30, 
-                            "Extracting text from document...")
+        """Extract text and generate embeddings with granular progress"""
         
-        processor: IDocumentProcessor = self.doc_processor_factory.get_processor(file_type)
+        # Define progress callback
+        def update_ocr_progress(current_page: int, total_pages: int):
+            # OCR is 70% of total work (30% to 100% range = 70 points)
+            # Map page progress to 30-100% range
+            page_percent = (current_page / total_pages) * 70
+            overall_percent = 30 + int(page_percent)
+            
+            progress_store.update(
+                doc_id, 
+                ProcessingStatus.EXTRACTING_TEXT, 
+                overall_percent,
+                f"Extracting text from page {current_page}/{total_pages}..."
+            )
+        
+        # Start OCR
+        progress_store.update(doc_id, ProcessingStatus.EXTRACTING_TEXT, 30, 
+                            "Starting text extraction...")
+        
+        processor = self.doc_processor_factory.get_processor(file_type)
         
         try:
-            chunks: List[DocumentChunk] = await processor.process(file_path, file_type)
+            chunks = await processor.process(file_path, file_type, update_ocr_progress)
         except DocumentProcessingError:
-            raise  # Re-raise DPE as-is
+            raise
         except Exception as e:
             raise DocumentProcessingError(
                 f"Text extraction failed: {str(e)}", 
@@ -126,7 +142,7 @@ class RAGService(IRAGService):
                 ErrorCode.NO_TEXT_FOUND
             )
         
-        # Enrich chunks with metadata
+        # Enrich chunks
         for chunk in chunks:
             chunk.document_id = document.id
             chunk.metadata.update({
@@ -134,8 +150,8 @@ class RAGService(IRAGService):
                 "document_name": document.filename
             })
         
-        # Generate embeddings
-        progress_store.update(doc_id, ProcessingStatus.GENERATING_EMBEDDINGS, 60, 
+        # Embeddings (fast, keep at fixed percentage)
+        progress_store.update(doc_id, ProcessingStatus.GENERATING_EMBEDDINGS, 95, 
                             f"Generating embeddings for {len(chunks)} chunks...")
         
         texts = [chunk.content for chunk in chunks]
