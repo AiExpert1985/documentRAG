@@ -404,17 +404,22 @@ class RAGService(IRAGService):
         } if file_path else None
     
     async def clear_all(self) -> bool:
-        """Clear all documents and vectors"""
+        """Clear all documents, vectors, and chat history"""
         try:
             documents = await self.document_repo.list_all()
             
+            # Delete physical files
             for doc in documents:
                 stored_filename = doc.metadata.get("stored_filename")
                 if stored_filename:
                     await self.file_storage.delete(stored_filename)
             
-            return (await self.vector_store.clear() and 
-                    await self.document_repo.delete_all())
+            # Clear vector store, database, and chat history
+            return (
+                await self.vector_store.clear() and 
+                await self.document_repo.delete_all() and
+                await self.message_repo.clear_history()  # ADD THIS LINE
+            )
         except Exception as e:
             logger.error(f"Clear all failed: {e}")
             return False
