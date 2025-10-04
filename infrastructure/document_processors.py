@@ -62,7 +62,12 @@ class BaseOCRProcessor(IDocumentProcessor):
         """
         pass
 
-    async def process(self, file_path: str, file_type: str, progress_callback: Optional[Callable[[int, int], None]] = None) -> List[DocumentChunk]:
+    async def process(
+        self, 
+        file_path: str, 
+        file_type: str,
+        progress_callback: Optional[Callable[[int, int], None]] = None
+    ) -> List[DocumentChunk]:
         """
         Extracts text from a document file and splits it into searchable chunks.
         
@@ -115,8 +120,14 @@ class BaseOCRProcessor(IDocumentProcessor):
                 ErrorCode.INVALID_FORMAT
             )
 
+        total_pages = len(images)
         docs: List[LangchainDocument] = []
+        
         for i, image in enumerate(images):
+            # Report progress before processing page
+            if progress_callback:
+                progress_callback(i + 1, total_pages)
+            
             try:
                 text = await asyncio.wait_for(
                     self._extract_text_from_image(image),
@@ -128,7 +139,6 @@ class BaseOCRProcessor(IDocumentProcessor):
                     ErrorCode.OCR_TIMEOUT
                 )
             
-            # FIX: Let RecursiveCharacterTextSplitter handle ALL splitting
             if text.strip():
                 docs.append(LangchainDocument(
                     page_content=text,
@@ -140,34 +150,6 @@ class BaseOCRProcessor(IDocumentProcessor):
                 "No text extracted from document",
                 ErrorCode.NO_TEXT_FOUND
             )
-        
-        # below code for progress indicator purpose
-        total_pages = len(images)
-        docs: List[LangchainDocument] = []
-        
-        for i, image in enumerate(images):
-            # Report progress BEFORE processing each page
-            if progress_callback:
-                progress_callback(i + 1, total_pages)
-            
-            try:
-                text = await asyncio.wait_for(
-                    self._extract_text_from_image(image),
-                    timeout=settings.OCR_TIMEOUT_SECONDS
-                )
-            except asyncio.TimeoutError:
-                raise DocumentProcessingError(
-                    f"OCR timeout on page {i+1}",
-                    ErrorCode.OCR_TIMEOUT
-                )
-            
-            if text.strip():
-                docs.append(LangchainDocument(
-                    page_content=text,
-                    metadata={"page": i + 1, "source": file_path}
-                ))
-
-        # end of the progress indicator code
         
         split_docs = self.text_splitter.split_documents(docs)
         logger.info(f"Processed {len(docs)} pages into {len(split_docs)} chunks")

@@ -39,6 +39,8 @@ class IVectorStore(ABC):
 
 # ============= Document Processor Interface =============
 class IDocumentProcessor(ABC):
+    """Interface for document processing"""
+    
     @abstractmethod
     async def process(
         self, 
@@ -46,9 +48,14 @@ class IDocumentProcessor(ABC):
         file_type: str,
         progress_callback: Optional[Callable[[int, int], None]] = None
     ) -> List[DocumentChunk]:
-        """Process document and return chunks"""
+        """Process document and return chunks
+        
+        Args:
+            file_path: Path to document file
+            file_type: File extension (pdf, jpg, etc)
+            progress_callback: Optional callback(current_page, total_pages)
+        """
         pass
-
 # ============= Embedding Service Interface =============
 class IEmbeddingService(ABC):
     """Interface for embedding generation"""

@@ -106,14 +106,27 @@ class RAGService(IRAGService):
     async def _extract_and_embed_chunks(
         self, file_path: str, file_type: str, document: ProcessedDocument, doc_id: str
     ) -> List[DocumentChunk]:
-        """Extract text and generate embeddings"""
-        progress_store.update(doc_id, ProcessingStatus.EXTRACTING_TEXT, 30, 
-                            "Extracting text from document...")
+        """Extract text and generate embeddings with page-level progress"""
         
-        processor: IDocumentProcessor = self.doc_processor_factory.get_processor(file_type)
+        def update_page_progress(current_page: int, total_pages: int):
+            # OCR is 70% of work (progress 30% to 100%)
+            page_percent = (current_page / total_pages) * 70
+            overall_percent = 30 + int(page_percent)
+            
+            progress_store.update(
+                doc_id, 
+                ProcessingStatus.EXTRACTING_TEXT, 
+                overall_percent,
+                f"Extracting text from page {current_page}/{total_pages}..."
+            )
+        
+        progress_store.update(doc_id, ProcessingStatus.EXTRACTING_TEXT, 30, 
+                            "Starting text extraction...")
+        
+        processor = self.doc_processor_factory.get_processor(file_type)
         
         try:
-            chunks: List[DocumentChunk] = await processor.process(file_path, file_type)
+            chunks = await processor.process(file_path, file_type, update_page_progress)
         except DocumentProcessingError:
             raise
         except Exception as e:
@@ -135,7 +148,7 @@ class RAGService(IRAGService):
                 "document_name": document.filename
             })
         
-        progress_store.update(doc_id, ProcessingStatus.GENERATING_EMBEDDINGS, 60, 
+        progress_store.update(doc_id, ProcessingStatus.GENERATING_EMBEDDINGS, 95, 
                             f"Generating embeddings for {len(chunks)} chunks...")
         
         texts = [chunk.content for chunk in chunks]
