@@ -6,8 +6,8 @@ from typing import List, Optional, Dict
 from sqlalchemy import select, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from core.interfaces import IDocumentRepository, IMessageRepository, ProcessedDocument 
-from core.models import ChunkSearchResult
+from core.interfaces import IDocumentRepository, IMessageRepository 
+from core.models import ChunkSearchResult, ProcessedDocument 
 from database.models import DocumentEntity, MessageEntity
 from config import settings
 
@@ -17,8 +17,11 @@ class SQLDocumentRepository(IDocumentRepository):
     def __init__(self, session: AsyncSession):
         self.session = session
     
-    def _to_domain(self, db_doc: DocumentEntity) -> ProcessedDocument:  # Remove Optional
-        # No longer check for None - caller ensures it's valid
+    # CORRECTED: Added Optional[DocumentEntity] type hint
+    def _to_domain(self, db_doc: Optional[DocumentEntity]) -> Optional[ProcessedDocument]:
+        """Converts an SQLAlchemy entity to a domain model."""
+        if db_doc is None: # CRITICAL FIX: Handles None input
+            return None
         return ProcessedDocument(
             id=db_doc.id,  # type: ignore
             filename=db_doc.filename,  # type: ignore
@@ -29,26 +32,24 @@ class SQLDocumentRepository(IDocumentRepository):
             }
         )
     
-    async def create(self, document_id: str, filename: str, file_hash: str, stored_filename: str) -> ProcessedDocument:
+    # CORRECTED: Now returns ProcessedDocument (guaranteed non-None on create)
+    async def create(self, document_id: str, filename: str, file_hash: str, 
+                    stored_filename: str) -> ProcessedDocument:
+        """Create document record - guaranteed to return non-None"""
         db_doc = DocumentEntity(
-            id=document_id, filename=filename, 
-            file_hash=file_hash, stored_filename=stored_filename
+            id=document_id, 
+            filename=filename, 
+            file_hash=file_hash, 
+            stored_filename=stored_filename
         )
         self.session.add(db_doc)
         await self.session.commit()
         await self.session.refresh(db_doc)
-        logger.info(f"✅ Successfully created ProcessedDocument in database")
+        logger.info(f"Created document {document_id} in database")
         
-        # Direct return - db_doc is guaranteed non-None after commit
-        return ProcessedDocument(
-            id=db_doc.id, # type: ignore
-            filename=db_doc.filename, # type: ignore
-            file_hash=db_doc.file_hash, # type: ignore
-            metadata={
-                "timestamp": db_doc.timestamp.isoformat(),
-                "stored_filename": db_doc.stored_filename
-            }
-        )
+        result = self._to_domain(db_doc)
+        assert result is not None, "Created document should never be None"
+        return result
 
     async def get_by_id(self, document_id: str) -> Optional[ProcessedDocument]:
         db_doc = await self.session.get(DocumentEntity, document_id)
@@ -64,12 +65,8 @@ class SQLDocumentRepository(IDocumentRepository):
         result = await self.session.execute(
             select(DocumentEntity).order_by(DocumentEntity.timestamp.desc())
         )
-        # Filter out None values (though they shouldn't exist in practice)
-        return [
-            domain_doc 
-            for doc in result.scalars().all() 
-            if (domain_doc := self._to_domain(doc)) is not None
-        ]
+        docs = [self._to_domain(doc) for doc in result.scalars().all()]
+        return [d for d in docs if d is not None]
     
     async def delete(self, document_id: str) -> bool:
         doc = await self.session.get(DocumentEntity, document_id)
@@ -94,39 +91,39 @@ class SQLMessageRepository(IMessageRepository):
         self.session = session
     
     async def save_search(self, query: str, results_count: int) -> None:
-        message = MessageEntity(sender="search", content=f"Query: {query} | Results: {results_count}")
+        message = MessageEntity(
+            sender="search", 
+            content=f"Query: {query} | Results: {results_count}"
+        )
         self.session.add(message)
         await self.session.commit()
     
-    async def save_search_results(self, query: str, results: List[ChunkSearchResult]) -> None:
+    async def save_search_results(self, query: str, 
+                                  results: List[ChunkSearchResult]) -> None:
         """Save query and results using same structure as live chat"""
-        # Save user question
         user_msg = MessageEntity(sender="user", content=query)
         self.session.add(user_msg)
         
         if not results:
-            # Save "no results" message
             ai_msg = MessageEntity(sender="ai", content="No relevant information found.")
             self.session.add(ai_msg)
         else:
-            # Save each result as separate AI message (same as live chat)
             for result in results:
-                # Store exactly what frontend expects
                 result_json = json.dumps({
                     "document_name": result.chunk.metadata.get('document_name'),
                     "page_number": result.chunk.metadata.get('page'),
-                    "content_snippet": result.chunk.content[:300] + "..." if len(result.chunk.content) > 300 else result.chunk.content,
+                    "content_snippet": result.chunk.content[:300] + "..." 
+                        if len(result.chunk.content) > 300 else result.chunk.content,
                     "document_id": result.chunk.document_id,
                     "download_url": f"http://127.0.0.1:8000/download/{result.chunk.document_id}"
                 })
-                
                 ai_msg = MessageEntity(sender="ai_result", content=result_json)
                 self.session.add(ai_msg)
         
         await self.session.commit()
 
     async def get_search_history(self, limit: int = 10) -> List[Dict]:
-        """Get complete chat history (both questions and answers)"""
+        """Get complete chat history"""
         result = await self.session.execute(
             select(MessageEntity)
             .where(MessageEntity.sender.in_(["user", "ai", "ai_result"]))
@@ -145,6 +142,10 @@ class SQLMessageRepository(IMessageRepository):
         ]
     
     async def clear_history(self) -> bool:
-        await self.session.execute(delete(MessageEntity).where(MessageEntity.sender.in_(["user", "ai", "ai_result"])))
+        await self.session.execute(
+            delete(MessageEntity).where(
+                MessageEntity.sender.in_(["user", "ai", "ai_result"])
+            )
+        )
         await self.session.commit()
         return True

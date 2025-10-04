@@ -6,7 +6,11 @@ from uuid import uuid4
 
 from fastapi import UploadFile, Request, HTTPException
 from pydantic import HttpUrl
-from api.schemas import DocumentsListItem, ProcessDocumentResponse, ErrorCode, ProcessingStatus
+
+from api.schemas import (
+    ProcessDocumentResponse, ErrorCode, ProcessingStatus, 
+    DocumentProcessingError, DocumentsListItem
+)
 from core.interfaces import (
     IDocumentProcessor, IRAGService, IVectorStore, IEmbeddingService, 
     IDocumentRepository, IMessageRepository, IFileStorage, DocumentChunk
@@ -44,12 +48,16 @@ class RAGService(IRAGService):
     async def _validate_and_prepare(self, file: UploadFile) -> Tuple[str, str, str, bytes]:
         """Validate file and generate IDs. Returns (hash, doc_id, stored_name, content)"""
         if not file.filename:
-            raise ValueError(f"{ErrorCode.INVALID_FORMAT.value}:No filename provided")
+            raise DocumentProcessingError(
+                "No filename provided", 
+                ErrorCode.INVALID_FORMAT
+            )
+
         try:
             validate_uploaded_file(file)
         except HTTPException as e:
             error_code = self._map_http_error_to_code(e.status_code)
-            raise ValueError(f"{error_code.value}:{e.detail}")
+            raise DocumentProcessingError(e.detail, error_code)
         
         content = await file.read()
         await file.seek(0)
@@ -74,19 +82,20 @@ class RAGService(IRAGService):
         """Check if file already exists"""
         existing = await self.document_repo.get_by_hash(file_hash)
         if existing:
-            raise ValueError(f"{ErrorCode.DUPLICATE_FILE.value}:Document already exists")
+            raise DocumentProcessingError(
+                "Document already exists",
+                ErrorCode.DUPLICATE_FILE
+            )
     
     async def _save_and_validate_file(self, file: UploadFile, stored_name: str) -> str:
         """Save file to disk and validate content"""
         file_path = await self.file_storage.save(file, stored_name)
-        
-        assert file.filename is not None, "Filename should not be None at this point"
-        
+        assert file.filename is not None, "Filename should not be None at this point"        
         try:
             validate_file_content(file_path, file.filename)
         except HTTPException as e:
             await self.file_storage.delete(stored_name)
-            raise ValueError(f"{ErrorCode.INVALID_FORMAT.value}:{e.detail}")
+            raise DocumentProcessingError(e.detail, ErrorCode.INVALID_FORMAT)
         
         return file_path
     
@@ -103,13 +112,19 @@ class RAGService(IRAGService):
         
         try:
             chunks: List[DocumentChunk] = await processor.process(file_path, file_type)
-        except TimeoutError:
-            raise ValueError(f"{ErrorCode.OCR_TIMEOUT.value}:Text extraction timed out")
+        except DocumentProcessingError:
+            raise  # Re-raise DPE as-is
         except Exception as e:
-            raise ValueError(f"{ErrorCode.NO_TEXT_FOUND.value}:No text extracted - {str(e)}")
-        
+            raise DocumentProcessingError(
+                f"Text extraction failed: {str(e)}", 
+                ErrorCode.NO_TEXT_FOUND
+            )
+
         if not chunks:
-            raise ValueError(f"{ErrorCode.NO_TEXT_FOUND.value}:No content extracted from document")
+            raise DocumentProcessingError(
+                "No content extracted from document", 
+                ErrorCode.NO_TEXT_FOUND
+            )
         
         # Enrich chunks with metadata
         for chunk in chunks:
@@ -140,12 +155,17 @@ class RAGService(IRAGService):
         
         success = await self.vector_store.add_chunks(chunks)
         if not success:
-            raise ValueError(f"{ErrorCode.PROCESSING_FAILED.value}:Failed to store vectors")
+            raise DocumentProcessingError(
+                "Failed to store vectors", 
+                ErrorCode.PROCESSING_FAILED
+            )
     
     # ============ CLEANUP ============
     
-    async def _cleanup_on_failure(self, document: Optional[ProcessedDocument], 
-                                  stored_filename: str) -> None:
+    async def _cleanup_on_failure(
+        self, document: Optional[ProcessedDocument], 
+        stored_filename: str, doc_id: str
+    ) -> None:
         """Clean up resources after failure"""
         if document and document.id:
             try:
@@ -163,40 +183,24 @@ class RAGService(IRAGService):
                 await self.file_storage.delete(stored_filename)
             except Exception as e:
                 logger.warning(f"File cleanup failed: {e}")
+        
+        progress_store.remove(doc_id)
+        logger.info(f"Cleanup complete for {doc_id}")
     
     # ============ ERROR RESPONSE BUILDER ============
     
-    def _build_error_response(self, filename: Optional[str], error_msg: str) -> ProcessDocumentResponse:
-        """Build error response with proper error code"""
-        if ":" in error_msg:
-            code_str, message = error_msg.split(":", 1)
-            try:
-                error_code = ErrorCode(code_str)
-            except ValueError:
-                error_code = ErrorCode.PROCESSING_FAILED
-                message = error_msg
-        else:
-            error_code = ErrorCode.PROCESSING_FAILED
-            message = error_msg
-        
-        return ProcessDocumentResponse(
-            status="error",
-            filename=filename or "unknown",  # Handle None case
-            document_id="",
-            chunks=0,
-            pages=0,
-            error=message,
-            error_code=error_code
-        )
-        
+    def _build_error_response(
+        self, filename: str, error: DocumentProcessingError
+    ) -> ProcessDocumentResponse:
+        """Build error response from DocumentProcessingError"""
         return ProcessDocumentResponse(
             status="error",
             filename=filename,
             document_id="",
             chunks=0,
             pages=0,
-            error=message,
-            error_code=error_code
+            error=error.message,
+            error_code=error.error_code
         )
     
     # ============ BACKGROUND PROCESSING ============
@@ -209,72 +213,63 @@ class RAGService(IRAGService):
         document: Optional[ProcessedDocument] = None
         
         try:
-            # Create DB record
             document = await self.document_repo.create(
                 doc_id, filename, file_hash, stored_name
             )
             
-            # Extract and embed (heavy operations)
-            chunks = await self._extract_and_embed_chunks(file_path, file_type, document, doc_id)
+            chunks = await self._extract_and_embed_chunks(
+                file_path, file_type, document, doc_id
+            )
             
-            # Store in vector DB
             await self._store_chunks(chunks, doc_id)
             
-            # Success!
             progress_store.complete(doc_id)
-            logger.info(f"✅ Successfully processed {filename}")
+            logger.info(f"Successfully processed {filename}")
         
-        except ValueError as e:
-            error_msg = str(e)
-            logger.error(f"Processing failed for '{filename}': {error_msg}")
-            
-            code_str = error_msg.split(":")[0] if ":" in error_msg else "PROCESSING_FAILED"
-            try:
-                error_code = ErrorCode(code_str)
-            except ValueError:
-                error_code = ErrorCode.PROCESSING_FAILED
-            
-            progress_store.fail(doc_id, error_msg.split(":", 1)[-1], error_code)
-            await self._cleanup_on_failure(document, stored_name)
+        except DocumentProcessingError as e:
+            logger.error(f"Processing failed for '{filename}': {e.message}")
+            progress_store.fail(doc_id, e.message, e.error_code)
+            await self._cleanup_on_failure(document, stored_name, doc_id)
         
         except Exception as e:
             logger.exception(f"Unexpected error processing '{filename}'")
-            progress_store.fail(doc_id, str(e), ErrorCode.PROCESSING_FAILED)
-            await self._cleanup_on_failure(document, stored_name)
+            progress_store.fail(
+                doc_id, 
+                f"Unexpected error: {str(e)}", 
+                ErrorCode.PROCESSING_FAILED
+            )
+            await self._cleanup_on_failure(document, stored_name, doc_id)
     
-    # ============ MAIN PROCESSING METHOD (ASYNC - NON-BLOCKING) ============
+    # ============ MAIN PROCESSING METHOD ============
     
     async def process_document(self, file: UploadFile) -> ProcessDocumentResponse:
-        """
-        Start document processing in background.
-        Returns immediately with document_id for progress tracking.
-        """
+        """Start document processing in background"""
+        doc_id: Optional[str] = None
+        
         try:
-            # Step 1: Fast validation and file save
             file_hash, doc_id, stored_name, _ = await self._validate_and_prepare(file)
-            
             # Assert filename is not None (validated in _validate_and_prepare)
             assert file.filename is not None
-            
             progress_store.start(doc_id, file.filename)
-            progress_store.update(doc_id, ProcessingStatus.VALIDATING, 10, "Validating file...")
+            progress_store.update(
+                doc_id, ProcessingStatus.VALIDATING, 10, "Validating file..."
+            )
             
-            # Step 2: Check duplicate
             await self._check_duplicate(file_hash, file.filename)
             
-            # Step 3: Save file to disk
-            progress_store.update(doc_id, ProcessingStatus.VALIDATING, 20, "Saving file...")
+            progress_store.update(
+                doc_id, ProcessingStatus.VALIDATING, 20, "Saving file..."
+            )
             file_path = await self._save_and_validate_file(file, stored_name)
             file_type = get_file_extension(file.filename)
             
-            # Step 4: Submit to background processing (RETURNS IMMEDIATELY)
             async_processor.submit_task(
                 self._process_document_background(
-                    doc_id, file_path, file_type, file_hash, file.filename, stored_name
+                    doc_id, file_path, file_type, file_hash, 
+                    file.filename, stored_name
                 )
             )
             
-            # Return immediately with document_id
             return ProcessDocumentResponse(
                 status="processing",
                 filename=file.filename,
@@ -284,17 +279,21 @@ class RAGService(IRAGService):
                 message="Document is being processed in background"
             )
         
-        except ValueError as e:
-            error_msg = str(e)
-            logger.error(f"Upload validation failed for '{file.filename}': {error_msg}")
-            return self._build_error_response(file.filename, error_msg)
+        except DocumentProcessingError as e:
+            logger.error(f"Upload validation failed: {e.message}")
+            if doc_id:
+                progress_store.fail(doc_id, e.message, e.error_code)
+            return self._build_error_response(file.filename or "unknown", e)
         
         except Exception as e:
-            error_msg = f"{ErrorCode.PROCESSING_FAILED.value}:Unexpected error - {str(e)}"
             logger.exception(f"Unexpected error uploading '{file.filename}'")
-            return self._build_error_response(file.filename, error_msg)
+            error = DocumentProcessingError(
+                f"Unexpected error during upload: {str(e)}",
+                ErrorCode.PROCESSING_FAILED
+            )
+            return self._build_error_response(file.filename or "unknown", error)
 
-    # ============ OTHER METHODS (UNCHANGED) ============
+    # ============ SEARCH & MANAGEMENT ============
 
     async def search(self, query: str, top_k: int = 5) -> List[ChunkSearchResult]:
         """Search across all documents"""
@@ -302,15 +301,12 @@ class RAGService(IRAGService):
             query_embedding = await self.embedding_service.generate_query_embedding(query)
             results = await self.vector_store.search(query_embedding, top_k)
             
-            # Filter valid results
             existing_docs = await self.document_repo.list_all()
             existing_ids = {doc.id for doc in existing_docs}
             valid_results = [
-                result for result in results 
-                if result.chunk.document_id in existing_ids
+                r for r in results if r.chunk.document_id in existing_ids
             ]
             
-            # Save search results
             await self.message_repo.save_search_results(query, valid_results)
             return valid_results
             
@@ -327,34 +323,25 @@ class RAGService(IRAGService):
             
             stored_filename = document.metadata.get("stored_filename")
             
-            success = True
             if stored_filename:
                 try:
                     await self.file_storage.delete(stored_filename)
                 except Exception as e:
                     logger.warning(f"File deletion failed: {e}")
-                    success = False
             
             try:
                 await self.vector_store.delete_by_document(document_id)
             except Exception as e:
                 logger.warning(f"Vector deletion failed: {e}")
-                success = False
             
-            try:
-                await self.document_repo.delete(document_id)
-            except Exception as e:
-                logger.error(f"DB deletion failed: {e}")
-                return False
-            
-            return True
+            return await self.document_repo.delete(document_id)
             
         except Exception as e:
             logger.error(f"Document deletion failed: {e}")
             return False
             
     async def list_documents(self, request: Request) -> List[DocumentsListItem]:
-        """List all documents, including download URLs"""
+        """List all documents with download URLs"""
         documents = await self.document_repo.list_all()
         base_url = str(request.base_url)
         return [
@@ -366,8 +353,10 @@ class RAGService(IRAGService):
             for doc in documents
         ]
         
-    async def get_document_with_path(self, document_id: str) -> Optional[Dict[str, Any]]:
-        """Get a document's details and its physical file path"""
+    async def get_document_with_path(
+        self, document_id: str
+    ) -> Optional[Dict[str, Any]]:
+        """Get document details and physical file path"""
         document = await self.document_repo.get_by_id(document_id)
         if not document:
             return None
@@ -387,13 +376,11 @@ class RAGService(IRAGService):
         try:
             documents = await self.document_repo.list_all()
             
-            # Delete physical files
             for doc in documents:
                 stored_filename = doc.metadata.get("stored_filename")
                 if stored_filename:
                     await self.file_storage.delete(stored_filename)
             
-            # Clear vector store and database
             return (await self.vector_store.clear() and 
                     await self.document_repo.delete_all())
         except Exception as e:

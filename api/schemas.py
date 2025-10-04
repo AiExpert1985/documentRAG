@@ -28,6 +28,19 @@ class SearchResponse(BaseModel):
     results: List[SearchResult]
     total_results: int
 
+# NEW: Custom exception for better error handling
+class DocumentProcessingError(Exception):
+    """Raised when document processing fails with a specific error code"""
+    
+    def __init__(self, message: str, error_code: 'ErrorCode'):
+        self.message = message
+        self.error_code = error_code
+        super().__init__(message)
+    
+    def __str__(self):
+        # Format used for logging and progress store
+        return f"[{self.error_code.value}] {self.message}"
+
 # NEW: Error codes for clear user feedback
 class ErrorCode(str, Enum):
     FILE_TOO_LARGE = "FILE_TOO_LARGE"
@@ -55,7 +68,7 @@ class ProcessDocumentResponse(BaseModel):
     pages: int
     message: Optional[str] = None
     error: Optional[str] = None
-    error_code: Optional[ErrorCode] = None  # NEW
+    error_code: Optional[ErrorCode] = None
 
 class StatusResponse(BaseModel):
     document_loaded: Optional[str] = None
