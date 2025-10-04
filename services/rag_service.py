@@ -17,6 +17,8 @@ from core.interfaces import (
 )
 from core.models import ChunkSearchResult, ProcessedDocument
 from services.document_processor_factory import DocumentProcessorFactory
+from database.session_factory import get_session  # NEW
+from infrastructure.repositories import SQLDocumentRepository  # NEW
 from utils.helpers import (
     get_file_extension, get_file_hash, sanitize_filename, 
     validate_file_content, validate_uploaded_file
@@ -36,17 +38,17 @@ class RAGService(IRAGService):
         document_repo: IDocumentRepository,
         message_repo: IMessageRepository
     ):
+        self.document_repo = document_repo
+        self.message_repo = message_repo
         self.vector_store = vector_store
         self.doc_processor_factory = doc_processor_factory
         self.embedding_service = embedding_service
         self.file_storage = file_storage
-        self.document_repo = document_repo
-        self.message_repo = message_repo
 
     # ============ VALIDATION & PREPARATION ============
     
     async def _validate_and_prepare(self, file: UploadFile) -> Tuple[str, str, str, bytes]:
-        """Validate file and generate IDs. Returns (hash, doc_id, stored_name, content)"""
+        """Validate file and generate IDs"""
         if not file.filename:
             raise DocumentProcessingError(
                 "No filename provided", 
@@ -90,7 +92,7 @@ class RAGService(IRAGService):
     async def _save_and_validate_file(self, file: UploadFile, stored_name: str) -> str:
         """Save file to disk and validate content"""
         file_path = await self.file_storage.save(file, stored_name)
-        assert file.filename is not None, "Filename should not be None at this point"        
+        assert file.filename is not None, "Filename should not be None at this point"    
         try:
             validate_file_content(file_path, file.filename)
         except HTTPException as e:
@@ -100,34 +102,18 @@ class RAGService(IRAGService):
         return file_path
     
     # ============ DOCUMENT PROCESSING ============
-
+    
     async def _extract_and_embed_chunks(
         self, file_path: str, file_type: str, document: ProcessedDocument, doc_id: str
     ) -> List[DocumentChunk]:
-        """Extract text and generate embeddings with granular progress"""
-        
-        # Define progress callback
-        def update_ocr_progress(current_page: int, total_pages: int):
-            # OCR is 70% of total work (30% to 100% range = 70 points)
-            # Map page progress to 30-100% range
-            page_percent = (current_page / total_pages) * 70
-            overall_percent = 30 + int(page_percent)
-            
-            progress_store.update(
-                doc_id, 
-                ProcessingStatus.EXTRACTING_TEXT, 
-                overall_percent,
-                f"Extracting text from page {current_page}/{total_pages}..."
-            )
-        
-        # Start OCR
+        """Extract text and generate embeddings"""
         progress_store.update(doc_id, ProcessingStatus.EXTRACTING_TEXT, 30, 
-                            "Starting text extraction...")
+                            "Extracting text from document...")
         
-        processor = self.doc_processor_factory.get_processor(file_type)
+        processor: IDocumentProcessor = self.doc_processor_factory.get_processor(file_type)
         
         try:
-            chunks = await processor.process(file_path, file_type, update_ocr_progress)
+            chunks: List[DocumentChunk] = await processor.process(file_path, file_type)
         except DocumentProcessingError:
             raise
         except Exception as e:
@@ -142,7 +128,6 @@ class RAGService(IRAGService):
                 ErrorCode.NO_TEXT_FOUND
             )
         
-        # Enrich chunks
         for chunk in chunks:
             chunk.document_id = document.id
             chunk.metadata.update({
@@ -150,8 +135,7 @@ class RAGService(IRAGService):
                 "document_name": document.filename
             })
         
-        # Embeddings (fast, keep at fixed percentage)
-        progress_store.update(doc_id, ProcessingStatus.GENERATING_EMBEDDINGS, 95, 
+        progress_store.update(doc_id, ProcessingStatus.GENERATING_EMBEDDINGS, 60, 
                             f"Generating embeddings for {len(chunks)} chunks...")
         
         texts = [chunk.content for chunk in chunks]
@@ -179,18 +163,23 @@ class RAGService(IRAGService):
     # ============ CLEANUP ============
     
     async def _cleanup_on_failure(
-        self, document: Optional[ProcessedDocument], 
-        stored_filename: str, doc_id: str
+        self, 
+        document_id: Optional[str],
+        stored_filename: str, 
+        doc_id: str,
+        doc_repo: Optional[IDocumentRepository] = None  # MODIFIED
     ) -> None:
         """Clean up resources after failure"""
-        if document and document.id:
+        repo = doc_repo or self.document_repo  # MODIFIED
+        
+        if document_id:
             try:
-                await self.vector_store.delete_by_document(document.id)
+                await self.vector_store.delete_by_document(document_id)
             except Exception as e:
                 logger.warning(f"Vector cleanup failed: {e}")
             
             try:
-                await self.document_repo.delete(document.id)
+                await repo.delete(document_id)  # MODIFIED
             except Exception as e:
                 logger.warning(f"DB cleanup failed: {e}")
         
@@ -203,58 +192,56 @@ class RAGService(IRAGService):
         progress_store.remove(doc_id)
         logger.info(f"Cleanup complete for {doc_id}")
     
-    # ============ ERROR RESPONSE BUILDER ============
-    
-    def _build_error_response(
-        self, filename: str, error: DocumentProcessingError
-    ) -> ProcessDocumentResponse:
-        """Build error response from DocumentProcessingError"""
-        return ProcessDocumentResponse(
-            status="error",
-            filename=filename,
-            document_id="",
-            chunks=0,
-            pages=0,
-            error=error.message,
-            error_code=error.error_code
-        )
-    
     # ============ BACKGROUND PROCESSING ============
     
     async def _process_document_background(
         self, doc_id: str, file_path: str, file_type: str, 
         file_hash: str, filename: str, stored_name: str
     ) -> None:
-        """The actual heavy processing - runs in background thread"""
+        """Background processing with independent database session"""
         document: Optional[ProcessedDocument] = None
         
-        try:
-            document = await self.document_repo.create(
-                doc_id, filename, file_hash, stored_name
-            )
+        # MODIFIED: Create independent session
+        async with get_session() as session:
+            doc_repo = SQLDocumentRepository(session)
             
-            chunks = await self._extract_and_embed_chunks(
-                file_path, file_type, document, doc_id
-            )
+            try:
+                document = await doc_repo.create(
+                    doc_id, filename, file_hash, stored_name
+                )
+                
+                chunks = await self._extract_and_embed_chunks(
+                    file_path, file_type, document, doc_id
+                )
+                
+                await self._store_chunks(chunks, doc_id)
+                
+                progress_store.complete(doc_id)
+                logger.info(f"Successfully processed {filename}")
             
-            await self._store_chunks(chunks, doc_id)
+            except DocumentProcessingError as e:
+                logger.error(f"Processing failed for '{filename}': {e.message}")
+                progress_store.fail(doc_id, e.message, e.error_code)
+                await self._cleanup_on_failure(
+                    document.id if document else None,
+                    stored_name, 
+                    doc_id,
+                    doc_repo  # MODIFIED
+                )
             
-            progress_store.complete(doc_id)
-            logger.info(f"Successfully processed {filename}")
-        
-        except DocumentProcessingError as e:
-            logger.error(f"Processing failed for '{filename}': {e.message}")
-            progress_store.fail(doc_id, e.message, e.error_code)
-            await self._cleanup_on_failure(document, stored_name, doc_id)
-        
-        except Exception as e:
-            logger.exception(f"Unexpected error processing '{filename}'")
-            progress_store.fail(
-                doc_id, 
-                f"Unexpected error: {str(e)}", 
-                ErrorCode.PROCESSING_FAILED
-            )
-            await self._cleanup_on_failure(document, stored_name, doc_id)
+            except Exception as e:
+                logger.exception(f"Unexpected error processing '{filename}'")
+                progress_store.fail(
+                    doc_id, 
+                    f"System error: {str(e)[:100]}",
+                    ErrorCode.PROCESSING_FAILED
+                )
+                await self._cleanup_on_failure(
+                    document.id if document else None,
+                    stored_name, 
+                    doc_id,
+                    doc_repo  # MODIFIED
+                )
     
     # ============ MAIN PROCESSING METHOD ============
     
@@ -299,15 +286,31 @@ class RAGService(IRAGService):
             logger.error(f"Upload validation failed: {e.message}")
             if doc_id:
                 progress_store.fail(doc_id, e.message, e.error_code)
-            return self._build_error_response(file.filename or "unknown", e)
+            return ProcessDocumentResponse(
+                status="error",
+                filename=file.filename or "unknown",
+                document_id="",
+                chunks=0,
+                pages=0,
+                error=e.message,
+                error_code=e.error_code
+            )
         
         except Exception as e:
-            logger.exception(f"Unexpected error uploading '{file.filename}'")
+            logger.exception(f"Unexpected error uploading")
             error = DocumentProcessingError(
-                f"Unexpected error during upload: {str(e)}",
+                f"Unexpected error: {str(e)}",
                 ErrorCode.PROCESSING_FAILED
             )
-            return self._build_error_response(file.filename or "unknown", error)
+            return ProcessDocumentResponse(
+                status="error",
+                filename=file.filename or "unknown",
+                document_id="",
+                chunks=0,
+                pages=0,
+                error=error.message,
+                error_code=error.error_code
+            )
 
     # ============ SEARCH & MANAGEMENT ============
 

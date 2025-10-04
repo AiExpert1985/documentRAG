@@ -13,6 +13,9 @@ class Settings(BaseSettings):
     
     # Database
     DATABASE_URL: str = "sqlite+aiosqlite:///./chat.db"
+    DB_POOL_SIZE: int = 5
+    DB_MAX_OVERFLOW: int = 10
+    DB_POOL_RECYCLE: int = 3600  # Recycle connections after 1 hour
     
     # Vector store
     VECTOR_DB_PATH: str = "./vector_db"
@@ -57,7 +60,7 @@ class Settings(BaseSettings):
     # Performance
     USE_CONNECTION_POOLING: bool = True
     MAX_CONNECTIONS: int = 10
-    
+
     class Config:
         env_file = ".env"
         env_file_encoding = "utf-8"

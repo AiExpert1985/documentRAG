@@ -14,7 +14,14 @@ logger = logging.getLogger(settings.LOGGER_NAME)
 
 #✅
 # Setup SQLAlchemy async engine and session maker
-async_engine = create_async_engine(settings.DATABASE_URL, echo=False)
+async_engine = create_async_engine(
+    settings.DATABASE_URL, 
+    echo=False,
+    pool_size=settings.DB_POOL_SIZE,
+    max_overflow=settings.DB_MAX_OVERFLOW,
+    pool_recycle=settings.DB_POOL_RECYCLE,
+    pool_pre_ping=True  # Check connection health before using
+)
 AsyncSessionLocal = async_sessionmaker(async_engine, expire_on_commit=False)
 Base = declarative_base()
 
