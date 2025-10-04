@@ -216,8 +216,19 @@ class TesseractProcessor(BaseOCRProcessor):
         super().__init__(pdf_converter, **kwargs)
         try:
             import pytesseract
+            # Check if Tesseract binary is accessible
+            pytesseract.get_tesseract_version()
         except ImportError:
-            raise ImportError("Tesseract not installed")
+            raise ImportError(
+                "pytesseract library not installed. Run: pip install pytesseract"
+            )
+        except pytesseract.TesseractNotFoundError:
+            raise RuntimeError(
+                "Tesseract OCR binary not found. Install it:\n"
+                "  Ubuntu/Debian: sudo apt-get install tesseract-ocr tesseract-ocr-ara\n"
+                "  Windows: https://github.com/UB-Mannheim/tesseract/wiki\n"
+                "  macOS: brew install tesseract tesseract-lang"
+            )
 
     async def _extract_text_from_image(self, image: Image.Image) -> str:
         logger.info('Using TesseractProcessor')

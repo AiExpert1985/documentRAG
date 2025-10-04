@@ -2,7 +2,7 @@
 """Simple in-memory progress tracking (good for MVP, swap to Redis later)"""
 from typing import Dict, Optional
 from api.schemas import ProcessingStatus, ErrorCode
-from threading import Timer # CRITICAL FIX: Import Timer
+from threading import Timer
 
 class ProgressStore:
     """Thread-safe progress tracking for document processing"""
@@ -31,8 +31,7 @@ class ProgressStore:
                 "current_step": step
             })
     
-    def fail(self, document_id: str, error: str, 
-             error_code: ErrorCode) -> None:
+    def fail(self, document_id: str, error: str, error_code: ErrorCode) -> None:
         """Mark processing as failed"""
         if document_id in self._progress:
             self._progress[document_id].update({
@@ -40,8 +39,8 @@ class ProgressStore:
                 "error": error,
                 "error_code": error_code
             })
-            # FIX: Start timer for cleanup on failure
-            Timer(300, lambda: self.remove(document_id)).start()
+            # Keep failures for 1 hour for debugging
+            Timer(3600, lambda: self.remove(document_id)).start()
     
     def complete(self, document_id: str) -> None:
         """Mark processing as completed"""
@@ -51,9 +50,8 @@ class ProgressStore:
                 "progress_percent": 100,
                 "current_step": "Done!"
             })
-            # FIX: Start timer for cleanup on completion
-            Timer(300, lambda: self.remove(document_id)).start()
-
+            # Keep completed status for 30 minutes
+            Timer(1800, lambda: self.remove(document_id)).start()
     
     def get(self, document_id: str) -> Optional[Dict]:
         """Get progress for a document"""
