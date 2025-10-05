@@ -62,17 +62,12 @@ class SQLDocumentRepository(IDocumentRepository):
         return self._to_domain(result.scalar_one_or_none())
 
     async def list_all(self) -> List[ProcessedDocument]:
-        """List all documents with proper transaction handling"""
-        try:
-            result = await self.session.execute(
-                select(DocumentEntity).order_by(DocumentEntity.timestamp.desc())
-            )
-            docs = [self._to_domain(doc) for doc in result.scalars().all()]
-            return [d for d in docs if d is not None]
-        except Exception as e:
-            logger.error(f"Failed to list documents: {e}")
-            await self.session.rollback()
-            raise
+        """List all documents"""
+        result = await self.session.execute(
+            select(DocumentEntity).order_by(DocumentEntity.timestamp.desc())
+        )
+        docs = [self._to_domain(doc) for doc in result.scalars().all()]
+        return [d for d in docs if d is not None]
     
     async def delete(self, document_id: str) -> bool:
         doc = await self.session.get(DocumentEntity, document_id)

@@ -58,7 +58,11 @@ class RAGService(IRAGService):
         try:
             validate_uploaded_file(file)
         except HTTPException as e:
-            error_code = self._map_http_error_to_code(e.status_code)
+            error_code = (
+                ErrorCode.FILE_TOO_LARGE if e.status_code == 413 else
+                ErrorCode.INVALID_FORMAT if e.status_code == 400 else
+                ErrorCode.PROCESSING_FAILED
+            )
             raise DocumentProcessingError(e.detail, error_code)
         
         content = await file.read()
@@ -69,14 +73,6 @@ class RAGService(IRAGService):
         stored_name = f"{doc_id}{safe_suffix}"
         
         return get_file_hash(content), doc_id, stored_name, content
-    
-    def _map_http_error_to_code(self, status_code: int) -> ErrorCode:
-        """Map HTTP status to error code"""
-        if status_code == 413:
-            return ErrorCode.FILE_TOO_LARGE
-        elif status_code == 400:
-            return ErrorCode.INVALID_FORMAT
-        return ErrorCode.PROCESSING_FAILED
     
     # ============ FILE OPERATIONS ============
     
@@ -92,7 +88,7 @@ class RAGService(IRAGService):
     async def _save_and_validate_file(self, file: UploadFile, stored_name: str) -> str:
         """Save file to disk and validate content"""
         file_path = await self.file_storage.save(file, stored_name)
-        assert file.filename is not None, "Filename should not be None at this point"    
+        assert file.filename is not None, "Filename should not be None at this point"   
         try:
             validate_file_content(file_path, file.filename)
         except HTTPException as e:
@@ -265,8 +261,6 @@ class RAGService(IRAGService):
             file_hash, doc_id, stored_name, _ = await self._validate_and_prepare(file)
             assert file.filename is not None
             progress_store.start(doc_id, file.filename)
-            
-            # REMOVED: await self._check_duplicate(file_hash, file.filename)
             
             progress_store.update(
                 doc_id, ProcessingStatus.VALIDATING, 20, "Saving file..."
