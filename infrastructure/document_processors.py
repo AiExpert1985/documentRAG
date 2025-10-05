@@ -113,7 +113,8 @@ class BaseOCRProcessor(IDocumentProcessor):
                 self.pdf_converter.convert, file_path, dpi=settings.OCR_DPI
             )
         elif file_type in settings.IMAGE_EXTENSIONS:
-            images = [Image.open(file_path)]
+            with Image.open(file_path) as img:
+                images = [img.copy()]
         else:
             raise DocumentProcessingError(
                 f"Unsupported file type: {file_type}",

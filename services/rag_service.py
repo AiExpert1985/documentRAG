@@ -259,19 +259,14 @@ class RAGService(IRAGService):
     # ============ MAIN PROCESSING METHOD ============
     
     async def process_document(self, file: UploadFile) -> ProcessDocumentResponse:
-        """Start document processing in background"""
         doc_id: Optional[str] = None
         
         try:
             file_hash, doc_id, stored_name, _ = await self._validate_and_prepare(file)
-            # Assert filename is not None (validated in _validate_and_prepare)
             assert file.filename is not None
             progress_store.start(doc_id, file.filename)
-            progress_store.update(
-                doc_id, ProcessingStatus.VALIDATING, 10, "Validating file..."
-            )
             
-            await self._check_duplicate(file_hash, file.filename)
+            # REMOVED: await self._check_duplicate(file_hash, file.filename)
             
             progress_store.update(
                 doc_id, ProcessingStatus.VALIDATING, 20, "Saving file..."
