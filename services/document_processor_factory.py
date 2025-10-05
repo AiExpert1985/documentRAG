@@ -11,13 +11,16 @@ from config import settings
 from infrastructure.pdf_converters import PyMuPDFConverter
 
 class DocumentProcessorFactory:
-    """Factory for document processors with strategy selection"""
+    """
+    Factory for creating OCR processors based on file type and OCR_ENGINE config.
+    Swap OCR engines (EasyOCR/Tesseract/PaddleOCR) via config without code changes.
+    """
     
     def __init__(self, pdf_converter_class=None):
         self._ocr_strategies: Dict[str, Type[IDocumentProcessor]] = {
             "easyocr": EasyOCRProcessor,
             "paddleocr": PaddleOCRProcessor,
-            "tesseract": TesseractProcessor  # Add this
+            "tesseract": TesseractProcessor
         }
         self.pdf_converter_class = pdf_converter_class or PyMuPDFConverter
 
@@ -32,36 +35,8 @@ class DocumentProcessorFactory:
 
     def _create_ocr_processor(self, needs_pdf_converter: bool = False) -> IDocumentProcessor:
         """
-        Creates an OCR processor instance with the configured engine strategy.
-        
-        Retrieves the processor class based on the OCR_ENGINE setting (easyocr or
-        paddleocr) and instantiates it with or without a PDF converter depending
-        on whether the source file is a PDF or direct image.
-        
-        Args:
-            needs_pdf_converter: If True, includes a PDF-to-image converter.
-                            If False, processor expects direct image input.
-                            Default is False for image-only processing.
-            
-        Returns:
-            IDocumentProcessor: Configured OCR processor ready for text extraction
-            
-        Raises:
-            ValueError: If configured OCR engine is not found in available strategies
-            
-        Example:
-            For PDF processing
-
-            processor = factory._create_ocr_processor(needs_pdf_converter=True)
-            
-            For image processing 
-
-            processor = factory._create_ocr_processor(needs_pdf_converter=False)
-            
-        Note:
-            This is a private helper method. External code should use get_processor()
-            instead. Creates a fresh PDF converter instance on each call to avoid
-            concurrency issues with shared state.
+        Create OCR processor using configured OCR_ENGINE.
+        PDF converter included only if needs_pdf_converter=True.
         """
         engine = settings.OCR_ENGINE.lower()
         processor_class = self._ocr_strategies.get(engine)
@@ -79,26 +54,8 @@ class DocumentProcessorFactory:
     
     def get_processor(self, file_type: str) -> IDocumentProcessor:
         """
-        Returns the appropriate document processor based on file type.
-        
-        Selects and instantiates the correct processor implementation using the
-        configured OCR engine strategy. For PDFs, includes a PDF-to-image converter.
-        For direct images, no converter is needed.
-        
-        Args:
-            file_type: Normalized file extension (e.g., "pdf", "jpg", "png")
-                    Should be lowercase without dot (use get_file_extension())
-            
-        Returns:
-            IDocumentProcessor: Configured processor instance ready to extract text
-            
-        Raises:
-            ValueError: If file type is unsupported or OCR engine is unknown
-            
-        Note:
-            Creates a new processor instance for each call to ensure stateless
-            processing. The underlying OCR engine (EasyOCR/PaddleOCR reader) is
-            shared across instances for performance.
+        Get OCR processor for file type ("pdf", "jpg", "png").
+        Uses configured OCR_ENGINE (easyocr/tesseract/paddleocr).
         """
         if file_type == "pdf":
             return self._get_pdf_processor()

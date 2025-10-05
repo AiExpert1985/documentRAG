@@ -18,7 +18,7 @@ class DocumentChunk:
     content: str
     document_id: str
     metadata: Dict[str, Any]
-    embedding: Optional[List[float]] = None
+    embedding: Optional[List[float]] = None # Vector of float numbers
 
 @dataclass
 class ChunkSearchResult:

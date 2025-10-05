@@ -39,7 +39,7 @@ class IVectorStore(ABC):
 
 # ============= Document Processor Interface =============
 class IDocumentProcessor(ABC):
-    """Interface for document processing"""
+    """ Document text extraction and chunking (OCR-based)."""
     
     @abstractmethod
     async def process(
@@ -48,12 +48,9 @@ class IDocumentProcessor(ABC):
         file_type: str,
         progress_callback: Optional[Callable[[int, int], None]] = None
     ) -> List[DocumentChunk]:
-        """Process document and return chunks
-        
-        Args:
-            file_path: Path to document file
-            file_type: File extension (pdf, jpg, etc)
-            progress_callback: Optional callback(current_page, total_pages)
+        """
+        Extract text via OCR and split into chunks.
+        progress_callback(current_page, total_pages) called per page if provided.
         """
         pass
 # ============= Embedding Service Interface =============
@@ -75,71 +72,15 @@ class IDocumentRepository(ABC):
     """
     Interface for document metadata persistence (filenames, hashes, storage paths).
     
-    Contract for storing and retrieving document records. Implementations handle
-    database-specific details (SQL, NoSQL, etc.). Does NOT manage physical files
-    or vector embeddings - only metadata.
-    
-    Responsibilities:
-        - CRUD operations for document metadata
-        - Duplicate detection via content hash
-        - Track physical file locations (stored_filename)
-        
-    Does NOT Handle:
-        - Physical file I/O (see IFileStorage)
-        - Vector embeddings (see IVectorStore)
-        - Document processing or chunking
-        
-    Typical Flow:
-        1. Check duplicate: get_by_hash(file_hash)
-        2. Create record: create(id, filename, hash, stored_filename)
-        3. Query: get_by_id(id) or list_all()
-        4. Cleanup: delete(id) or delete_all()
-        
-    Implementations:
-        - SQLDocumentRepository (SQLAlchemy with SQLite/PostgreSQL)
-        - (Future: MongoDocumentRepository, DynamoDBRepository, etc.)
-        
-    Usage Pattern:
-        # Dependency injection (FastAPI):
-        def endpoint(repo: IDocumentRepository = Depends(get_document_repository)):
-            doc = await repo.create(...)
-            
-        # Manual (background tasks):
-        async with get_session() as session:
-            repo = SQLDocumentRepository(session)
-            doc = await repo.get_by_id(doc_id)
+    Does NOT handle: physical files (see IFileStorage) or vectors (see IVectorStore).
+    Implementations: SQLDocumentRepository. Swap for MongoDB, DynamoDB, etc.
     """
     
     @abstractmethod
     async def create(self, document_id: str, filename: str, file_hash: str, stored_filename: str) -> ProcessedDocument:
         """
-        Creates a new document record in the database.
-        
-        Stores metadata about an uploaded document including its unique identifier,
-        original filename, content hash for duplicate detection, and the secure filename
-        used for disk storage.
-        
-        Args:
-            document_id: Unique UUID identifier for the document
-            filename: Original filename from the upload (user-visible name)
-            file_hash: SHA256 hash of file content for duplicate detection
-            stored_filename: Secure filename used on disk (UUID-based)
-            
-        Returns:
-            ProcessedDocument: Domain model representing the created database record
-            
-        Example:
-            doc = await repo.create(
-                document_id="123e4567-e89b",
-                filename="company_policy.pdf",
-                file_hash="a3f2e1b...",
-                stored_filename="123e4567-e89b.pdf"
-            )
-            
-        Note:
-            This only creates the database record. The actual file must be saved
-            to disk separately using the file storage service. The stored_filename
-            is needed later to locate and delete the physical file.
+        Create DB record for document metadata. Physical file saved separately.
+        stored_filename is UUID-based name on disk for later retrieval/deletion.
         """
         pass
     
@@ -151,17 +92,8 @@ class IDocumentRepository(ABC):
     @abstractmethod
     async def get_by_hash(self, file_hash: str) -> Optional[ProcessedDocument]:
         """
-        Retrieves a document by its content hash to detect duplicate uploads.
-        
-        Uses SHA256 hash comparison to find documents with identical content,
-        even if filenames differ. This prevents processing the same document
-        multiple times.
-        
-        Args:
-            file_hash: SHA256 hash of the file content (64-character hex string)
-            
-        Returns:
-            ProcessedDocument if a document with matching hash exists, None otherwise
+        Find document by SHA256 hash for duplicate detection.
+        Returns None if not found (safe to upload).
 
         """
         pass
@@ -256,41 +188,11 @@ class IRAGService(ABC):
     @abstractmethod
     async def process_document(self, file: UploadFile) -> ProcessDocumentResponse:
         """
-        Starts async document processing and returns immediately (< 1 second).
+        Validate file and start background processing (returns immediately).
         
-        Fast Path (synchronous):
-            1. Validates file (size, type, format)
-            2. Checks for duplicates (SHA256 hash)
-            3. Saves file to disk
-            4. Submits to background processor
-            5. Returns with document_id for progress tracking
-        
-        Slow Path (background thread):
-            - OCR text extraction (30s - 5min)
-            - Embedding generation
-            - Vector storage in Vecotr Database (chromaDB or faiss)
-        
-        Args:
-            file: UploadFile (PDF, JPG, PNG, max 50MB)
-        
-        Returns:
-            ProcessDocumentResponse with:
-            - status: "processing" or "error"
-            - document_id: UUID for polling /processing-status/{document_id}
-            - error_code: FILE_TOO_LARGE, INVALID_FORMAT, DUPLICATE_FILE, etc.
-        
-        Error Handling:
-            Validation failures return immediately with error_code.
-            Processing failures tracked via ProgressStore.
-            Auto-cleanup on any failure (file, DB, vectors).
-        
-        Concurrency:
-            Handles 3 concurrent uploads via ThreadPoolExecutor.
-        
-        Example:
-            response = await rag_service.process_document(file)
-            # Returns: {"status": "processing", "document_id": "abc-123"}
-            # Poll: GET /processing-status/abc-123
+        Fast path: validation + file save (< 1s)
+        Background: duplicate check → OCR → embeddings → storage (30s-5min)
+        Client polls /processing-status/{doc_id} for progress updates.
         """
         pass
 

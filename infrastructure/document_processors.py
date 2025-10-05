@@ -30,35 +30,8 @@ class BaseOCRProcessor(IDocumentProcessor):
     @abstractmethod
     async def _extract_text_from_image(self, image: Image.Image) -> str:
         """
-        Extracts text from a single image using the configured OCR engine.
-        
-        Args:
-            image: PIL (Python Imaging Library) Image object containing the visual content to process
-                (either a direct image file or a page converted from PDF)
-            
-        Returns:
-            str: Extracted text content from the image. Empty string if no text found.
-            
-        Raises:
-            NotImplementedError: If called on base class without override
-            asyncio.TimeoutError: If OCR processing exceeds configured timeout
-            ImportError: If required OCR library is not installed
-            
-        Implementation Notes:
-            - Must handle both single-language and multi-language text
-            - Should return empty string rather than None when no text detected
-            - Should preserve text structure (paragraphs, line breaks) when possible
-            - Runs in async context to avoid blocking during OCR processing
-            
-        Example Implementations:
-            EasyOCRProcessor: Uses easyocr.Reader.readtext()
-            PaddleOCRProcessor: Uses PaddleOCR.ocr()
-            
-        Note:
-            This method is called inside a timeout wrapper (OCR_TIMEOUT_SECONDS)
-            to prevent hanging on corrupted or extremely large images. OCR engines
-            are initialized once as class variables and reused across all instances
-            for performance.
+        Extract text from single image using OCR engine.
+        Returns empty string if no text found. Runs with timeout protection.
         """
         pass
 
@@ -68,41 +41,6 @@ class BaseOCRProcessor(IDocumentProcessor):
         file_type: str,
         progress_callback: Optional[Callable[[int, int], None]] = None
     ) -> List[DocumentChunk]:
-        """
-        Extracts text from a document file and splits it into searchable chunks.
-        
-        Handles both PDF files (by converting to images first) and direct image files.
-        Uses OCR to extract text from each page/image, then splits the extracted text
-        into smaller chunks suitable for semantic search and embedding generation.
-        
-        Args:
-            file_path: Absolute path to the document file on disk
-            file_type: Normalized file extension ("pdf", "jpg", "jpeg", "png")
-                    Must be lowercase without dot
-            
-        Returns:
-            List[DocumentChunk]: Text chunks ready for embedding, each containing:
-                - Extracted text content
-                - Page number metadata
-                - Unique chunk ID
-                - Empty document_id (set by service layer)
-                
-        Raises:
-            ValueError: If file type is unsupported, PDF converter missing for PDFs,
-                    OCR timeout exceeded, or no text extracted from document
-            
-        Process Flow:
-            1. Load images (convert PDF pages or open image file)
-            2. Extract text from each image using OCR (with timeout protection)
-            3. Split extracted text into chunks using RecursiveCharacterTextSplitter
-            4. Return chunks with metadata (page numbers, source path)
-            
-        Note:
-            OCR extraction has a configurable timeout (OCR_TIMEOUT_SECONDS) per page
-            to prevent hanging on corrupted or oversized files. Chunk size and overlap
-            are configured via CHUNK_SIZE and CHUNK_OVERLAP settings.
-        """
-        
         if file_type == 'pdf':
             if not self.pdf_converter:
                 raise DocumentProcessingError(

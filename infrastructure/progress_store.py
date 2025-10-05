@@ -7,45 +7,10 @@ from core.enums import ProcessingStatus, ErrorCode
 
 class ProgressStore:
     """
-    Thread-safe in-memory storage for tracking document processing progress.
+    In-memory storage for document processing progress (polling endpoint).
     
-    Stores real-time status updates that clients poll via /processing-status/{doc_id}.
-    Automatically removes old entries to prevent memory leaks.
-    
-    Usage:
-        # Start tracking
-        progress_store.start(doc_id, "report.pdf")
-        
-        # Update progress
-        progress_store.update(doc_id, ProcessingStatus.EXTRACTING_TEXT, 45, "Processing page 3/10...")
-        
-        # Mark complete or failed
-        progress_store.complete(doc_id)
-        progress_store.fail(doc_id, "OCR timeout", ErrorCode.OCR_TIMEOUT)
-        
-        # Client polls for status
-        status = progress_store.get(doc_id)
-    
-    Cleanup:
-        - Removes entries when MAX_ENTRIES (500) reached
-        - Keeps newest 250, removes oldest 250
-        - Happens automatically on each start() call
-    
-    Storage Format:
-        {
-            "doc_id": {
-                "filename": str,
-                "status": ProcessingStatus,
-                "progress_percent": int (0-100),
-                "current_step": str,
-                "error": Optional[str],
-                "error_code": Optional[ErrorCode],
-                "_created": datetime
-            }
-        }
-    
-    Thread Safety: NOT thread-safe (use in single-threaded async context)
-    Persistence: In-memory only (lost on server restart)
+    Auto-cleanup at 500 entries (keeps newest 250). Lost on server restart.
+    Usage: start() → update() → complete()/fail(). Client polls get().
     """
     MAX_ENTRIES = 500
     
@@ -67,6 +32,7 @@ class ProgressStore:
             del self._progress[doc_id]
     
     def start(self, document_id: str, filename: str) -> None:
+        """Initialize progress tracking. Triggers cleanup if at 500 entries."""
         self._cleanup_if_full()
         self._progress[document_id] = {
             "filename": filename,
@@ -80,6 +46,7 @@ class ProgressStore:
     
     def update(self, document_id: str, status: ProcessingStatus, 
                progress: int, step: str) -> None:
+        """Update progress status (0-100%) and current step message."""
         if document_id in self._progress:
             self._progress[document_id].update({
                 "status": status,

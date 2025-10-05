@@ -8,13 +8,16 @@ from typing import Coroutine
 logger = logging.getLogger(__name__)
 
 class AsyncDocumentProcessor:
-    """Processes documents in background threads"""
+    """    
+    Background document processor using ThreadPoolExecutor (max 3 concurrent).
+    Fire-and-forget task submission. Call shutdown() on app exit.
+    """
     
     def __init__(self, max_workers: int = 3):
         self._executor = ThreadPoolExecutor(max_workers=max_workers)
     
     def submit_task(self, coro: Coroutine) -> None:
-        """Submit an async task to run in background"""
+        """Submit async task to run in background thread (fire-and-forget)."""
         def run_async():
             try:
                 loop = asyncio.new_event_loop()
@@ -27,7 +30,7 @@ class AsyncDocumentProcessor:
         self._executor.submit(run_async)
     
     def shutdown(self):
-        """Clean shutdown - wait for running tasks"""
+        """Wait for running tasks to complete, then shutdown executor."""
         self._executor.shutdown(wait=True)
 
 # Global instance

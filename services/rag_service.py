@@ -50,30 +50,8 @@ class RAGService(IRAGService):
     
     async def _validate_and_prepare(self, file: UploadFile) -> Tuple[str, str, str, bytes]:
         """
-        Validate uploaded file and prepare metadata for processing.
-    
-        Performs client-side validation (size, type, format) and generates
-        unique identifiers. Does NOT check for duplicates (done in background).
-        
-        Args:
-            file: Uploaded file from FastAPI request
-            
-        Returns:
-            Tuple of (file_hash, doc_id, stored_filename, content):
-                - file_hash: SHA256 hash for duplicate detection
-                - doc_id: UUID for database and tracking
-                - stored_filename: Safe filename for disk (e.g., "uuid.pdf")
-                - content: File bytes for hash calculation
-                
-        Raises:
-            DocumentProcessingError: 
-                - INVALID_FORMAT: No filename provided
-                - FILE_TOO_LARGE: Exceeds max size
-                - INVALID_FORMAT: Unsupported file type
-                
-        Example:
-            file_hash, doc_id, stored_name, _ = await self._validate_and_prepare(file)
-            # Returns: ("a3f2e1b...", "123e4567-e89b", "123e4567-e89b.pdf", b"...")
+        Validate file (size, type, format) and generate IDs. No DB queries.
+        Returns (file_hash, doc_id, stored_filename, content).
         """
         if not file.filename:
             raise DocumentProcessingError(
@@ -112,7 +90,10 @@ class RAGService(IRAGService):
             )
     
     async def _save_and_validate_file(self, file: UploadFile, stored_name: str) -> str:
-        """Save file to disk and validate content"""
+        """
+        Save file to disk and validate content (magic numbers). 
+        Auto-cleanup on failure. Returns absolute file path.
+        """
         file_path = await self.file_storage.save(file, stored_name)
         assert file.filename is not None, "Filename should not be None at this point"   
         try:
@@ -128,45 +109,8 @@ class RAGService(IRAGService):
         self, file_path: str, file_type: str, document: ProcessedDocument, doc_id: str
     ) -> List[DocumentChunk]:
         """
-        Extract text from document via OCR and split into searchable chunks.
-        
-        Phase 1 of document processing pipeline (OCR only, no embeddings).
-        Updates progress store with real-time page-level feedback.
-        
-        Args:
-            file_path: Absolute path to file on disk
-            file_type: Normalized extension ("pdf", "jpg", "png")
-            document: Database record with metadata
-            doc_id: Progress tracking ID
-            
-        Returns:
-            List of chunks WITHOUT embeddings:
-                - chunk.content: Extracted text
-                - chunk.document_id: Set to document.id
-                - chunk.metadata: {page, document_name}
-                - chunk.embedding: None (set by _generate_embeddings later)
-                
-        Raises:
-            DocumentProcessingError:
-                - NO_TEXT_FOUND: OCR extracted nothing
-                - OCR_TIMEOUT: Page exceeded timeout
-                - PROCESSING_FAILED: OCR engine error
-                
-        Progress Updates:
-            - 30%: "Starting text extraction..."
-            - 30-95%: "Extracting text from page X/Y..." (live per page)
-            
-        Example Output:
-            [
-                DocumentChunk(
-                    id="uuid_0",
-                    content="Employee vacation policy...",
-                    document_id="abc-123",
-                    metadata={"page": 1, "document_name": "HR_Manual.pdf"},
-                    embedding=None  # ← Not generated yet
-                ),
-                ...
-            ]
+        OCR extraction and text chunking (Phase 1 - no embeddings yet).
+        Real-time page progress (30-95%). Timeout protection per page.
         """
         def update_page_progress(current_page: int, total_pages: int):
             page_percent = (current_page / total_pages) * 65  # 65% of total work
@@ -181,8 +125,8 @@ class RAGService(IRAGService):
         progress_store.update(doc_id, ProcessingStatus.EXTRACTING_TEXT, 30, 
                             "Starting text extraction...")
         
-        processor = self.doc_processor_factory.get_processor(file_type)
-        chunks = await processor.process(file_path, file_type, update_page_progress)
+        processor: IDocumentProcessor = self.doc_processor_factory.get_processor(file_type)
+        chunks : List[DocumentChunk] = await processor.process(file_path, file_type, update_page_progress)
         
         if not chunks:
             raise DocumentProcessingError(
@@ -190,7 +134,6 @@ class RAGService(IRAGService):
                 ErrorCode.NO_TEXT_FOUND
             )
         
-        # Add metadata
         for chunk in chunks:
             chunk.document_id = document.id
             chunk.metadata.update({
@@ -217,8 +160,8 @@ class RAGService(IRAGService):
             f"Generating embeddings for {len(chunks)} chunks..."
         )
         
-        texts = [chunk.content for chunk in chunks]
-        embeddings = await self.embedding_service.generate_embeddings(texts)
+        texts : List[str] = [chunk.content for chunk in chunks]
+        embeddings: List[List[float]] = await self.embedding_service.generate_embeddings(texts)
         
         for chunk, embedding in zip(chunks, embeddings):
             chunk.embedding = embedding
@@ -229,7 +172,10 @@ class RAGService(IRAGService):
     # ============ STORAGE ============
     
     async def _store_chunks(self, chunks: List[DocumentChunk], doc_id: str) -> None:
-        """Store chunks in vector database"""
+        """
+        Store chunks in vector database. Progress: 80%.
+        Raises DocumentProcessingError if storage fails.
+        """
         progress_store.update(doc_id, ProcessingStatus.STORING, 80, 
                             "Storing in vector database...")
         
@@ -310,38 +256,10 @@ class RAGService(IRAGService):
         file_hash: str, filename: str, stored_name: str
     ) -> None:
         """
-        Process document in background thread with independent database session.
+        Complete document processing pipeline in background (independent DB session).
         
-        Runs the complete processing pipeline: duplicate check → OCR → embeddings → 
-        vector storage. Updates progress store throughout. Auto-cleanup on failure.
-        
-        Args:
-            doc_id: UUID for progress tracking and database record
-            file_path: Absolute path to saved file on disk
-            file_type: Normalized extension ("pdf", "jpg", "png")
-            file_hash: SHA256 hash for duplicate detection
-            filename: Original user-provided filename
-            stored_name: UUID-based filename on disk (e.g., "uuid.pdf")
-            
-        Returns:
-            None (updates progress_store, user polls /processing-status/{doc_id})
-            
-        Pipeline Stages:
-            1. Check duplicates (20-25%)
-            2. Create DB record (25%)
-            3. Extract text via OCR (30-95%)
-            4. Generate embeddings (95%)
-            5. Store in vector DB (80-100%)
-            
-        Error Handling:
-            - Updates progress_store with error code on failure
-            - Rolls back: deletes file, DB record, vectors
-            - Logs exception with full stack trace
-            
-        Note:
-            - Uses independent DB session (not request-scoped)
-            - Runs in ThreadPoolExecutor (up to 3 concurrent)
-            - Never raises exceptions (returns None, updates progress)
+        Pipeline: duplicate check → OCR → embeddings → storage.
+        Updates progress_store throughout. Auto-cleanup on failure. Never raises (logs errors).
         """
         document: Optional[ProcessedDocument] = None
         

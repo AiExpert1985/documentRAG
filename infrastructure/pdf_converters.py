@@ -7,7 +7,7 @@ import io
 
 from core.interfaces import IPdfToImageConverter
 
-class PyMuPDFConverter(IPdfToImageConverter):  # ← This class exists?
+class PyMuPDFConverter(IPdfToImageConverter):
     def convert(self, file_path: str, dpi: int = 300) -> List[Image.Image]:
         """Converts PDF pages to PIL Images."""
         images = []

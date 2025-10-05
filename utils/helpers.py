@@ -11,7 +11,10 @@ from config import settings
 logger = logging.getLogger(settings.LOGGER_NAME)
 
 def validate_uploaded_file(file: UploadFile) -> None:
-    """Validate uploaded file (name, type, size)."""
+    """
+    Validate file name, type, and size. 
+    Raises HTTPException on failure.
+    """
     if not file.filename:
         raise HTTPException(status_code=400, detail="No filename provided")
     
