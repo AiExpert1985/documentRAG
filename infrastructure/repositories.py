@@ -16,11 +16,10 @@ logger = logging.getLogger(settings.LOGGER_NAME)
 class SQLDocumentRepository(IDocumentRepository):
     def __init__(self, session: AsyncSession):
         self.session = session
-    
-    # CORRECTED: Added Optional[DocumentEntity] type hint
+
     def _to_domain(self, db_doc: Optional[DocumentEntity]) -> Optional[ProcessedDocument]:
         """Converts an SQLAlchemy entity to a domain model."""
-        if db_doc is None: # CRITICAL FIX: Handles None input
+        if db_doc is None:
             return None
         return ProcessedDocument(
             id=db_doc.id,  # type: ignore
@@ -31,11 +30,9 @@ class SQLDocumentRepository(IDocumentRepository):
                 "stored_filename": db_doc.stored_filename
             }
         )
-    
-    # CORRECTED: Now returns ProcessedDocument (guaranteed non-None on create)
+
     async def create(self, document_id: str, filename: str, file_hash: str, 
                     stored_filename: str) -> ProcessedDocument:
-        """Create document record - guaranteed to return non-None"""
         db_doc = DocumentEntity(
             id=document_id, 
             filename=filename, 

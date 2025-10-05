@@ -72,7 +72,43 @@ class IEmbeddingService(ABC):
 
 # ============= Repository Interfaces =============
 class IDocumentRepository(ABC):
-    """Interface for document data access"""
+    """
+    Interface for document metadata persistence (filenames, hashes, storage paths).
+    
+    Contract for storing and retrieving document records. Implementations handle
+    database-specific details (SQL, NoSQL, etc.). Does NOT manage physical files
+    or vector embeddings - only metadata.
+    
+    Responsibilities:
+        - CRUD operations for document metadata
+        - Duplicate detection via content hash
+        - Track physical file locations (stored_filename)
+        
+    Does NOT Handle:
+        - Physical file I/O (see IFileStorage)
+        - Vector embeddings (see IVectorStore)
+        - Document processing or chunking
+        
+    Typical Flow:
+        1. Check duplicate: get_by_hash(file_hash)
+        2. Create record: create(id, filename, hash, stored_filename)
+        3. Query: get_by_id(id) or list_all()
+        4. Cleanup: delete(id) or delete_all()
+        
+    Implementations:
+        - SQLDocumentRepository (SQLAlchemy with SQLite/PostgreSQL)
+        - (Future: MongoDocumentRepository, DynamoDBRepository, etc.)
+        
+    Usage Pattern:
+        # Dependency injection (FastAPI):
+        def endpoint(repo: IDocumentRepository = Depends(get_document_repository)):
+            doc = await repo.create(...)
+            
+        # Manual (background tasks):
+        async with get_session() as session:
+            repo = SQLDocumentRepository(session)
+            doc = await repo.get_by_id(doc_id)
+    """
     
     @abstractmethod
     async def create(self, document_id: str, filename: str, file_hash: str, stored_filename: str) -> ProcessedDocument:

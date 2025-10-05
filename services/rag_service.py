@@ -124,17 +124,53 @@ class RAGService(IRAGService):
         return file_path
     
     # ============ DOCUMENT PROCESSING ============
-    
-    async def _extract_and_embed_chunks(
+    async def _extract_text_chunks(
         self, file_path: str, file_type: str, document: ProcessedDocument, doc_id: str
     ) -> List[DocumentChunk]:
-        """Extract text and generate embeddings with page-level progress"""
+        """
+        Extract text from document via OCR and split into searchable chunks.
         
-        def update_page_progress(current_page: int, total_pages: int):
-            # OCR is 70% of work (progress 30% to 100%)
-            page_percent = (current_page / total_pages) * 70
-            overall_percent = 30 + int(page_percent)
+        Phase 1 of document processing pipeline (OCR only, no embeddings).
+        Updates progress store with real-time page-level feedback.
+        
+        Args:
+            file_path: Absolute path to file on disk
+            file_type: Normalized extension ("pdf", "jpg", "png")
+            document: Database record with metadata
+            doc_id: Progress tracking ID
             
+        Returns:
+            List of chunks WITHOUT embeddings:
+                - chunk.content: Extracted text
+                - chunk.document_id: Set to document.id
+                - chunk.metadata: {page, document_name}
+                - chunk.embedding: None (set by _generate_embeddings later)
+                
+        Raises:
+            DocumentProcessingError:
+                - NO_TEXT_FOUND: OCR extracted nothing
+                - OCR_TIMEOUT: Page exceeded timeout
+                - PROCESSING_FAILED: OCR engine error
+                
+        Progress Updates:
+            - 30%: "Starting text extraction..."
+            - 30-95%: "Extracting text from page X/Y..." (live per page)
+            
+        Example Output:
+            [
+                DocumentChunk(
+                    id="uuid_0",
+                    content="Employee vacation policy...",
+                    document_id="abc-123",
+                    metadata={"page": 1, "document_name": "HR_Manual.pdf"},
+                    embedding=None  # ← Not generated yet
+                ),
+                ...
+            ]
+        """
+        def update_page_progress(current_page: int, total_pages: int):
+            page_percent = (current_page / total_pages) * 65  # 65% of total work
+            overall_percent = 30 + int(page_percent)
             progress_store.update(
                 doc_id, 
                 ProcessingStatus.EXTRACTING_TEXT, 
@@ -146,23 +182,15 @@ class RAGService(IRAGService):
                             "Starting text extraction...")
         
         processor = self.doc_processor_factory.get_processor(file_type)
+        chunks = await processor.process(file_path, file_type, update_page_progress)
         
-        try:
-            chunks = await processor.process(file_path, file_type, update_page_progress)
-        except DocumentProcessingError:
-            raise
-        except Exception as e:
-            raise DocumentProcessingError(
-                f"Text extraction failed: {str(e)}", 
-                ErrorCode.NO_TEXT_FOUND
-            )
-
         if not chunks:
             raise DocumentProcessingError(
                 "No content extracted from document", 
                 ErrorCode.NO_TEXT_FOUND
             )
         
+        # Add metadata
         for chunk in chunks:
             chunk.document_id = document.id
             chunk.metadata.update({
@@ -170,8 +198,24 @@ class RAGService(IRAGService):
                 "document_name": document.filename
             })
         
-        progress_store.update(doc_id, ProcessingStatus.GENERATING_EMBEDDINGS, 95, 
-                            f"Generating embeddings for {len(chunks)} chunks...")
+        return chunks
+
+
+    async def _generate_embeddings(
+        self, chunks: List[DocumentChunk], doc_id: str
+    ) -> List[DocumentChunk]:
+        """
+        Generate and attach embeddings to chunks.
+        
+        Takes chunks without embeddings, returns same chunks WITH embeddings.
+        Progress: 95%
+        """
+        progress_store.update(
+            doc_id, 
+            ProcessingStatus.GENERATING_EMBEDDINGS, 
+            95, 
+            f"Generating embeddings for {len(chunks)} chunks..."
+        )
         
         texts = [chunk.content for chunk in chunks]
         embeddings = await self.embedding_service.generate_embeddings(texts)
@@ -180,6 +224,7 @@ class RAGService(IRAGService):
             chunk.embedding = embedding
         
         return chunks
+
     
     # ============ STORAGE ============
     
@@ -204,8 +249,39 @@ class RAGService(IRAGService):
         doc_id: str,
         doc_repo: Optional[IDocumentRepository] = None  # MODIFIED
     ) -> None:
-        """Clean up resources after failure"""
-        repo = doc_repo or self.document_repo  # MODIFIED
+        """
+        Rollback all changes after processing failure (file, database, vectors).
+        
+        Attempts to delete in reverse order of creation. Continues cleanup even if
+        individual steps fail (logs warnings, doesn't raise exceptions).
+        
+        Args:
+            document_id: Database record ID (None if DB record not created yet)
+            stored_filename: Physical filename on disk (e.g., "uuid.pdf")
+            doc_id: Progress tracking ID (always exists)
+            doc_repo: Database repository (uses independent session in background)
+            
+        Cleanup Order:
+            1. Vector store chunks (if document_id exists)
+            2. Database record (if document_id exists)
+            3. Physical file (if stored_filename exists)
+            4. Progress store entry (always)
+            
+        Error Handling:
+            - Logs warnings if cleanup steps fail
+            - Never raises exceptions (best-effort cleanup)
+            - Continues attempting all steps even if one fails
+            
+        Example:
+            # After OCR timeout, rollback everything:
+            await self._cleanup_on_failure(
+                document.id,      # DB record exists
+                "uuid.pdf",       # File exists
+                doc_id,           # Progress exists
+                doc_repo          # Background session
+            )
+        """
+        repo = doc_repo or self.document_repo  
         
         if document_id:
             try:
@@ -214,7 +290,7 @@ class RAGService(IRAGService):
                 logger.warning(f"Vector cleanup failed: {e}")
             
             try:
-                await repo.delete(document_id)  # MODIFIED
+                await repo.delete(document_id)  
             except Exception as e:
                 logger.warning(f"DB cleanup failed: {e}")
         
@@ -233,22 +309,68 @@ class RAGService(IRAGService):
         self, doc_id: str, file_path: str, file_type: str, 
         file_hash: str, filename: str, stored_name: str
     ) -> None:
-        """Background processing with independent database session"""
+        """
+        Process document in background thread with independent database session.
+        
+        Runs the complete processing pipeline: duplicate check → OCR → embeddings → 
+        vector storage. Updates progress store throughout. Auto-cleanup on failure.
+        
+        Args:
+            doc_id: UUID for progress tracking and database record
+            file_path: Absolute path to saved file on disk
+            file_type: Normalized extension ("pdf", "jpg", "png")
+            file_hash: SHA256 hash for duplicate detection
+            filename: Original user-provided filename
+            stored_name: UUID-based filename on disk (e.g., "uuid.pdf")
+            
+        Returns:
+            None (updates progress_store, user polls /processing-status/{doc_id})
+            
+        Pipeline Stages:
+            1. Check duplicates (20-25%)
+            2. Create DB record (25%)
+            3. Extract text via OCR (30-95%)
+            4. Generate embeddings (95%)
+            5. Store in vector DB (80-100%)
+            
+        Error Handling:
+            - Updates progress_store with error code on failure
+            - Rolls back: deletes file, DB record, vectors
+            - Logs exception with full stack trace
+            
+        Note:
+            - Uses independent DB session (not request-scoped)
+            - Runs in ThreadPoolExecutor (up to 3 concurrent)
+            - Never raises exceptions (returns None, updates progress)
+        """
         document: Optional[ProcessedDocument] = None
         
-        # MODIFIED: Create independent session
         async with get_session() as session:
             doc_repo = SQLDocumentRepository(session)
             
             try:
+                # Check duplicate
+                existing = await doc_repo.get_by_hash(file_hash)
+                if existing:
+                    raise DocumentProcessingError(
+                        "Document already exists",
+                        ErrorCode.DUPLICATE_FILE
+                    )
+                
+                # Create document
                 document = await doc_repo.create(
                     doc_id, filename, file_hash, stored_name
                 )
                 
-                chunks = await self._extract_and_embed_chunks(
+                # 🔹 Step 1: Extract text (30-95%)
+                chunks = await self._extract_text_chunks(
                     file_path, file_type, document, doc_id
                 )
                 
+                # 🔹 Step 2: Generate embeddings (95%)
+                chunks = await self._generate_embeddings(chunks, doc_id)
+                
+                # 🔹 Step 3: Store in vector DB
                 await self._store_chunks(chunks, doc_id)
                 
                 progress_store.complete(doc_id)
@@ -261,7 +383,7 @@ class RAGService(IRAGService):
                     document.id if document else None,
                     stored_name, 
                     doc_id,
-                    doc_repo  # MODIFIED
+                    doc_repo
                 )
             
             except Exception as e:
@@ -275,8 +397,11 @@ class RAGService(IRAGService):
                     document.id if document else None,
                     stored_name, 
                     doc_id,
-                    doc_repo  # MODIFIED
+                    doc_repo
                 )
+        
+
+
     
     # ============ MAIN PROCESSING METHOD ============
     
