@@ -2,7 +2,7 @@
 from pydantic import BaseModel, HttpUrl
 from typing import Optional, List
 
-from core.enums import ErrorCode, ProcessingStatus
+from core.enums import DocumentResponseStatus, ErrorCode, ProcessingStatus
 
 class Message(BaseModel):
     sender: str
@@ -43,7 +43,7 @@ class DocumentProcessingError(Exception):
 
 
 class ProcessDocumentResponse(BaseModel):
-    status: str
+    status: DocumentResponseStatus
     filename: str
     document_id: str
     chunks: int

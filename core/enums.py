@@ -30,3 +30,8 @@ class ProcessingStatus(str, Enum):
             return ProcessingStatus(status)
         except ValueError:
             return ProcessingStatus.FAILED
+        
+class DocumentResponseStatus(str, Enum):
+    """Status for document upload response."""
+    PROCESSING = "processing"  # Upload accepted, processing in background
+    ERROR = "error"             # Upload or validation failed

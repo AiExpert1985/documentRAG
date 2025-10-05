@@ -11,6 +11,7 @@ from api.schemas import (
     ProcessDocumentResponse, ErrorCode, ProcessingStatus, 
     DocumentProcessingError, DocumentsListItem
 )
+from core.enums import DocumentResponseStatus
 from core.interfaces import (
     IDocumentProcessor, IRAGService, IVectorStore, IEmbeddingService, 
     IDocumentRepository, IMessageRepository, IFileStorage, DocumentChunk
@@ -301,7 +302,7 @@ class RAGService(IRAGService):
             )
             
             return ProcessDocumentResponse(
-                status="processing",
+                status=DocumentResponseStatus.PROCESSING,
                 filename=file.filename,
                 document_id=doc_id,
                 chunks=0,
@@ -314,7 +315,7 @@ class RAGService(IRAGService):
             if doc_id:
                 progress_store.fail(doc_id, e.message, e.error_code)
             return ProcessDocumentResponse(
-                status="error",
+                status=DocumentResponseStatus.ERROR,
                 filename=file.filename or "unknown",
                 document_id="",
                 chunks=0,
@@ -330,7 +331,7 @@ class RAGService(IRAGService):
                 ErrorCode.PROCESSING_FAILED
             )
             return ProcessDocumentResponse(
-                status="error",
+                status=DocumentResponseStatus.ERROR,
                 filename=file.filename or "unknown",
                 document_id="",
                 chunks=0,
