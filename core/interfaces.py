@@ -232,7 +232,7 @@ class IRAGService(ABC):
         Slow Path (background thread):
             - OCR text extraction (30s - 5min)
             - Embedding generation
-            - Vector storage in ChromaDB
+            - Vector storage in Vecotr Database (chromaDB or faiss)
         
         Args:
             file: UploadFile (PDF, JPG, PNG, max 50MB)

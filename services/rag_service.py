@@ -48,7 +48,32 @@ class RAGService(IRAGService):
     # ============ VALIDATION & PREPARATION ============
     
     async def _validate_and_prepare(self, file: UploadFile) -> Tuple[str, str, str, bytes]:
-        """Validate file and generate IDs"""
+        """
+        Validate uploaded file and prepare metadata for processing.
+    
+        Performs client-side validation (size, type, format) and generates
+        unique identifiers. Does NOT check for duplicates (done in background).
+        
+        Args:
+            file: Uploaded file from FastAPI request
+            
+        Returns:
+            Tuple of (file_hash, doc_id, stored_filename, content):
+                - file_hash: SHA256 hash for duplicate detection
+                - doc_id: UUID for database and tracking
+                - stored_filename: Safe filename for disk (e.g., "uuid.pdf")
+                - content: File bytes for hash calculation
+                
+        Raises:
+            DocumentProcessingError: 
+                - INVALID_FORMAT: No filename provided
+                - FILE_TOO_LARGE: Exceeds max size
+                - INVALID_FORMAT: Unsupported file type
+                
+        Example:
+            file_hash, doc_id, stored_name, _ = await self._validate_and_prepare(file)
+            # Returns: ("a3f2e1b...", "123e4567-e89b", "123e4567-e89b.pdf", b"...")
+        """
         if not file.filename:
             raise DocumentProcessingError(
                 "No filename provided", 

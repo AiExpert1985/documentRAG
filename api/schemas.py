@@ -1,7 +1,8 @@
 # api/schemas.py
 from pydantic import BaseModel, HttpUrl
-from typing import Optional, List, Dict
-from enum import Enum
+from typing import Optional, List
+
+from core.enums import ErrorCode, ProcessingStatus
 
 class Message(BaseModel):
     sender: str
@@ -28,7 +29,6 @@ class SearchResponse(BaseModel):
     results: List[SearchResult]
     total_results: int
 
-# NEW: Custom exception for better error handling
 class DocumentProcessingError(Exception):
     """Raised when document processing fails with a specific error code"""
     
@@ -41,24 +41,6 @@ class DocumentProcessingError(Exception):
         # Format used for logging and progress store
         return f"[{self.error_code.value}] {self.message}"
 
-# NEW: Error codes for clear user feedback
-class ErrorCode(str, Enum):
-    FILE_TOO_LARGE = "FILE_TOO_LARGE"
-    INVALID_FORMAT = "INVALID_FORMAT"
-    DUPLICATE_FILE = "DUPLICATE_FILE"
-    NO_TEXT_FOUND = "NO_TEXT_FOUND"
-    PROCESSING_FAILED = "PROCESSING_FAILED"
-    OCR_TIMEOUT = "OCR_TIMEOUT"
-
-# NEW: Processing status enum
-class ProcessingStatus(str, Enum):
-    PENDING = "pending"
-    VALIDATING = "validating"
-    EXTRACTING_TEXT = "extracting_text"
-    GENERATING_EMBEDDINGS = "generating_embeddings"
-    STORING = "storing"
-    COMPLETED = "completed"
-    FAILED = "failed"
 
 class ProcessDocumentResponse(BaseModel):
     status: str
