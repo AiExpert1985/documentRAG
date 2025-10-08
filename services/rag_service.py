@@ -109,11 +109,11 @@ class RAGService(IRAGService):
         self, file_path: str, file_type: str, document: ProcessedDocument, doc_id: str
     ) -> List[DocumentChunk]:
         """
-        OCR extraction and text chunking (Phase 1 - no embeddings yet).
-        Real-time page progress (30-95%). Timeout protection per page.
+        Extract text via OCR and split into chunks (without embeddings).
+        Progress: 30-95%. Returns chunks with embedding=None.
         """
         def update_page_progress(current_page: int, total_pages: int):
-            page_percent = (current_page / total_pages) * 65  # 65% of total work
+            page_percent = (current_page / total_pages) * 65
             overall_percent = 30 + int(page_percent)
             progress_store.update(
                 doc_id, 
@@ -125,8 +125,8 @@ class RAGService(IRAGService):
         progress_store.update(doc_id, ProcessingStatus.EXTRACTING_TEXT, 30, 
                             "Starting text extraction...")
         
-        processor: IDocumentProcessor = self.doc_processor_factory.get_processor(file_type)
-        chunks : List[DocumentChunk] = await processor.process(file_path, file_type, update_page_progress)
+        processor = self.doc_processor_factory.get_processor(file_type)
+        chunks = await processor.process(file_path, file_type, update_page_progress)
         
         if not chunks:
             raise DocumentProcessingError(
@@ -140,6 +140,9 @@ class RAGService(IRAGService):
                 "document_id": document.id, 
                 "document_name": document.filename
             })
+        
+        # 🔍 DEBUG: Save chunks to file for inspection
+        self._save_chunks_for_debug(chunks, document.filename)
         
         return chunks
 
@@ -281,9 +284,12 @@ class RAGService(IRAGService):
                 )
                 
                 # 🔹 Step 1: Extract text (30-95%)
-                chunks = await self._extract_text_chunks(
+                chunks : List[DocumentChunk] = await self._extract_text_chunks(
                     file_path, file_type, document, doc_id
                 )
+
+                for i, chunk in enumerate(chunks):
+                    print(f"{i}: {chunk.content}")
                 
                 # 🔹 Step 2: Generate embeddings (95%)
                 chunks = await self._generate_embeddings(chunks, doc_id)
@@ -495,3 +501,26 @@ class RAGService(IRAGService):
             "chunks_available": chunk_count,
             "ready_for_queries": len(documents) > 0
         }
+    
+
+    # ============ DEBUG & TROUBLESHOOTNG ============
+
+    def _save_chunks_for_debug(self, chunks: List[DocumentChunk], filename: str) -> None:
+        """Save extracted chunks to text file for OCR troubleshooting."""
+        debug_dir = Path("debug_ocr")
+        debug_dir.mkdir(exist_ok=True)
+        
+        debug_file = debug_dir / f"{filename}.txt"
+        
+        with open(debug_file, "w", encoding="utf-8") as f:
+            f.write(f"Total chunks: {len(chunks)}\n")
+            f.write("=" * 80 + "\n\n")
+            
+            for i, chunk in enumerate(chunks, 1):
+                f.write(f"CHUNK {i}\n")
+                f.write(f"Page: {chunk.metadata.get('page', 'N/A')}\n")
+                f.write("-" * 80 + "\n")
+                f.write(chunk.content)
+                f.write("\n\n" + "=" * 80 + "\n\n")
+        
+        logger.info(f"Debug: Saved {len(chunks)} chunks to {debug_file}")

@@ -40,3 +40,4 @@ rag_system.log
 # Temporary files
 *.tmp
 temp/
+debug_ocr/
