@@ -377,24 +377,113 @@ class PaddleOCRProcessor(BaseOCRProcessor):
 
     async def _extract_text_from_image(self, image: Image.Image) -> str:
         logger.info("Using PaddleOCRProcessor")
-        # Ensure engine or raise a runtime error to trigger graceful fallback upstream
         self._ensure_engine()
 
-        img_bytes = io.BytesIO()
-        image.save(img_bytes, format="PNG")
-        img_bytes.seek(0)
+        # Convert PIL Image to NumPy array (stable input format)
+        import numpy as np
+        img_array = np.array(image.convert("RGB"))
 
-        # Paddle returns: [[ [bbox, (text, conf)], ... ]]
-        result = await asyncio.to_thread(self._engine.ocr, img_bytes.getvalue(), cls=True)  # type: ignore
+        # Call OCR without cls parameter
+        result = await asyncio.to_thread(self._engine.ocr, img_array)  # type: ignore
 
+        logger.info(f"Result type: {type(result)}")
+        
         items: List[Tuple[List[List[int]], str, float]] = []
-        for page in (result or []):
-            for det in (page or []):
-                bbox = det[0]
-                text = det[1][0] if det[1] else ""
-                conf = float(det[1][1]) if det[1] else 0.0
-                if text:
-                    items.append((bbox, text, conf))
-
+        
+        # Handle dict-based result format (newer PaddleOCR versions)
+        if isinstance(result, dict):
+            logger.info(f"Dict keys: {list(result.keys())}")
+            result_dict = result
+            
+            texts = (result_dict.get('rec_texts') or 
+                    result_dict.get('texts') or [])
+            scores = (result_dict.get('rec_scores') or 
+                    result_dict.get('scores') or [])
+            polys = (result_dict.get('rec_polys') or 
+                    result_dict.get('polys') or [])
+            
+            logger.info(f"Found {len(texts)} texts, {len(scores)} scores, {len(polys)} polys")
+            
+            for i, text in enumerate(texts):
+                if not text or not text.strip():
+                    continue
+                
+                score = float(scores[i]) if i < len(scores) else 0.0
+                
+                if i < len(polys):
+                    bbox_raw = polys[i]
+                    bbox = bbox_raw.tolist() if hasattr(bbox_raw, 'tolist') else bbox_raw
+                else:
+                    bbox = []
+                
+                if bbox and text.strip():
+                    items.append((bbox, text.strip(), score))
+        
+        # Handle list format
+        elif isinstance(result, list):
+            logger.info(f"List format with {len(result)} pages")
+            
+            # DEBUG: Show structure
+            if result:
+                first_page = result[0]
+                logger.info(f"First page type: {type(first_page)}")
+                logger.info(f"First page is dict: {isinstance(first_page, dict)}")
+                
+                # If first page is a dict, it's the new format!
+                if isinstance(first_page, dict):
+                    logger.info(f"First page keys: {list(first_page.keys())}")
+                    
+                    # Extract from dict format
+                    texts = first_page.get('rec_texts', [])
+                    scores = first_page.get('rec_scores', [])
+                    polys = first_page.get('rec_polys', [])
+                    
+                    logger.info(f"Found {len(texts)} texts in dict")
+                    
+                    for i, text in enumerate(texts):
+                        if not text or not text.strip():
+                            continue
+                        
+                        score = float(scores[i]) if i < len(scores) else 0.0
+                        
+                        if i < len(polys):
+                            bbox_raw = polys[i]
+                            bbox = bbox_raw.tolist() if hasattr(bbox_raw, 'tolist') else bbox_raw
+                        else:
+                            bbox = []
+                        
+                        if bbox and text.strip():
+                            items.append((bbox, text.strip(), score))
+                
+                # Classic nested list format
+                elif isinstance(first_page, list):
+                    logger.info(f"First page length: {len(first_page)}")
+                    if first_page:
+                        logger.info(f"First detection: {first_page[0]}")
+                    
+                    for page in result:
+                        if not page:
+                            continue
+                        for detection in page:
+                            if not detection or len(detection) < 2:
+                                continue
+                            
+                            bbox = detection[0]
+                            text_conf = detection[1]
+                            
+                            if isinstance(text_conf, (list, tuple)) and len(text_conf) >= 1:
+                                text = text_conf[0] if isinstance(text_conf[0], str) else str(text_conf[0])
+                                conf = float(text_conf[1]) if len(text_conf) > 1 else 0.0
+                                
+                                if text and text.strip():
+                                    items.append((bbox, text, conf))
+        
+        logger.info(f"Total extracted: {len(items)} text items from PaddleOCR")
+        
+        if not items:
+            logger.error("No items extracted!")
+            logger.error(f"Result structure: {result}")
+        
+        # Rebuild lines with preserved structure
         text = rebuild_text_from_boxes(items)
         return text
