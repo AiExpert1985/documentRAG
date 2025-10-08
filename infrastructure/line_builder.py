@@ -9,11 +9,11 @@ def _cx(b: BBox) -> float: return sum(p[0] for p in b) / 4.0
 def _cy(b: BBox) -> float: return sum(p[1] for p in b) / 4.0
 def _h(b: BBox) -> float:  ys = [p[1] for p in b]; return max(ys) - min(ys)
 
-def _is_rtl_text(tokens: List[str]) -> bool:
-    # Majority Arabic heuristic
-    ar = sum(1 for t in tokens if _ARABIC_RE.search(t))
-    la = sum(1 for t in tokens if re.search(r"[A-Za-z]", t))
-    return ar >= la and ar > 0
+def _is_rtl_text(tokens: list[str]) -> bool:
+    s = "".join(tokens)
+    ar = sum(1 for ch in s if '\u0600' <= ch <= '\u06FF')
+    la = sum(1 for ch in s if ('A' <= ch <= 'Z') or ('a' <= ch <= 'z'))
+    return ar >= max(la, 1) and ar > 0
 
 def rebuild_text_from_boxes(
     items: List[Tuple[BBox, str, float]],

@@ -61,6 +61,9 @@ class Settings(BaseSettings):
     USE_CONNECTION_POOLING: bool = True
     MAX_CONNECTIONS: int = 10
 
+    # Document processing
+    ARABIC_BIDI_WRAP_FOR_DISPLAY: bool = True  # Add RTL markers for display
+
     class Config:
         env_file = ".env"
         env_file_encoding = "utf-8"

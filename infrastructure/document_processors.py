@@ -85,6 +85,18 @@ def _is_atomic(doc: LangchainDocument) -> bool:
     return kind in {"item", "header"}
 
 
+def _has_arabic(s: str) -> bool:
+    return any('\u0600' <= ch <= '\u06FF' for ch in s)
+
+def _has_latin(s: str) -> bool:
+    return any(('A' <= ch <= 'Z') or ('a' <= ch <= 'z') for ch in s)
+
+def _needs_flip_paddle_ar_token(s: str) -> bool:
+    return _has_arabic(s) and not _has_latin(s)
+
+def _flip_if_needed(s: str) -> str:
+    return s[::-1] if _needs_flip_paddle_ar_token(s) else s
+
 # -----------------------------
 # Base Processor
 # -----------------------------
@@ -346,6 +358,7 @@ class PaddleOCRProcessor(BaseOCRProcessor):
     def __init__(self, pdf_converter: Optional[IPdfToImageConverter] = None, **kwargs) -> None:
         super().__init__(pdf_converter, **kwargs)
         self._engine = None
+        
 
     def _ensure_engine(self) -> None:
         # inside PaddleOCRProcessor._ensure_engine()
@@ -389,6 +402,21 @@ class PaddleOCRProcessor(BaseOCRProcessor):
         logger.info(f"Result type: {type(result)}")
         
         items: List[Tuple[List[List[int]], str, float]] = []
+
+        def _arabic_heavy(s: str) -> bool:
+            # proportion of Arabic letters among all letters
+            letters = [ch for ch in s if ch.isalpha()]
+            if not letters:
+                return False
+            ar = sum(1 for ch in letters if '\u0600' <= ch <= '\u06FF')
+            return ar / len(letters) >= 0.6
+
+        def _fix_paddle_arabic_token(s: str) -> str:
+            # Some PaddleOCR builds output Arabic tokens in LTR order – flip once
+            return s[::-1] if _arabic_heavy(s) else s
+
+        # Apply just before calling rebuild_text_from_boxes(...)
+        items = [(bbox, _fix_paddle_arabic_token(text), conf) for (bbox, text, conf) in items]
         
         # Handle dict-based result format (newer PaddleOCR versions)
         if isinstance(result, dict):
@@ -484,6 +512,6 @@ class PaddleOCRProcessor(BaseOCRProcessor):
             logger.error("No items extracted!")
             logger.error(f"Result structure: {result}")
         
-        # Rebuild lines with preserved structure
+        items = [(bbox, _flip_if_needed(text), conf) for (bbox, text, conf) in items]
         text = rebuild_text_from_boxes(items)
         return text
