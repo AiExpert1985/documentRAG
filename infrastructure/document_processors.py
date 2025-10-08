@@ -14,6 +14,7 @@ from langchain_core.documents import Document as LangchainDocument
 from core.interfaces import IDocumentProcessor, DocumentChunk, IPdfToImageConverter
 from api.schemas import DocumentProcessingError, ErrorCode  # FIX: Added import
 from config import settings
+from utils.arabic_segmenter import segment_arabic
 
 logger = logging.getLogger(settings.LOGGER_NAME)
 
@@ -24,7 +25,7 @@ class BaseOCRProcessor(IDocumentProcessor):
         self.text_splitter = RecursiveCharacterTextSplitter(
             chunk_size=chunk_size,
             chunk_overlap=chunk_overlap,
-            separators=["\n\n", "\n", " ", ".", "؟", "!", "،", ""]
+            separators=["\n\n", "\n", ":", "؛", "؟", ".", "!", "،", " " , ""]
         )
 
     @abstractmethod
@@ -79,10 +80,11 @@ class BaseOCRProcessor(IDocumentProcessor):
                 )
             
             if text.strip():
-                docs.append(LangchainDocument(
-                    page_content=text,
-                    metadata={"page": i + 1, "source": file_path}
-                ))
+                for segment in segment_arabic(text):
+                    docs.append(LangchainDocument(
+                        page_content=segment,
+                        metadata={"page": i + 1, "source": file_path}
+                    ))
 
         if not docs:
             raise DocumentProcessingError(
@@ -91,6 +93,17 @@ class BaseOCRProcessor(IDocumentProcessor):
             )
         
         split_docs = self.text_splitter.split_documents(docs)
+
+        # ✅ OPTIONAL: Merge tiny chunks
+        MIN_LEN = 140
+        merged = []
+        for d in split_docs:
+            if merged and len(merged[-1].page_content) < MIN_LEN:
+                merged[-1].page_content += "\n" + d.page_content
+            else:
+                merged.append(d)
+        split_docs = merged
+
         logger.info(f"Processed {len(docs)} pages into {len(split_docs)} chunks")
 
         return [
