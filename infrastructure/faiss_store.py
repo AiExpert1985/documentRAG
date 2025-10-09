@@ -15,7 +15,7 @@ from config import settings
 logger = logging.getLogger(settings.LOGGER_NAME)
 
 class FAISSVectorStore(IVectorStore):
-    """FAISS implementation of the vector store"""
+    """FAISS implementation with normalized cosine similarity scoring (0-1 scale)"""
     
     def __init__(self, index_path: str = settings.VECTOR_DB_PATH):
         self._index: Optional[faiss.IndexFlatL2] = None
@@ -83,6 +83,21 @@ class FAISSVectorStore(IVectorStore):
             return False
 
     async def search(self, query_embedding: List[float], top_k: int = 5) -> List[ChunkSearchResult]:
+        """
+        Search with unified cosine similarity scores (0-1 scale).
+        
+        CHANGED: Score calculation now returns normalized similarity:
+        - Old: score = 1/(1+distance) → inconsistent with ChromaDB
+        - New: score = 1 - (distance²/4) → cosine similarity in [0,1]
+        
+        Math explanation (for L2-normalized vectors):
+        - FAISS returns: d² = ||query - chunk||² (squared L2 distance)
+        - Relationship: d² = 2(1 - cos(θ)) where θ is the angle between vectors
+        - Solving for cosine: cos(θ) = 1 - d²/2
+        - Mapping to [0,1]: similarity = (cos(θ) + 1)/2 = 1 - d²/4
+        
+        This makes 0.70 threshold mean the same thing in FAISS and ChromaDB.
+        """
         if not self._index:
             logger.warning("[FAISS] Search called but index is empty.")
             return []
@@ -105,14 +120,25 @@ class FAISSVectorStore(IVectorStore):
                 metadata = self._metadata.get(chunk_id)
                 
                 if metadata:
+                    # ============= NEW: Unified Similarity Scoring =============
+                    # Convert FAISS L2 distance to cosine similarity [0,1]
+                    l2_distance_squared = distances[0][i]
+                    
+                    # For unit vectors: d² = 2(1-cos) → cos = 1 - d²/2
+                    # Map cos∈[-1,1] to similarity∈[0,1]: (cos+1)/2 = 1 - d²/4
+                    similarity = 1.0 - (l2_distance_squared / 4.0)
+                    
+                    # Clamp to [0,1] for numerical stability
+                    similarity = max(0.0, min(1.0, similarity))
+                    # ============= END: Unified Similarity Scoring =============
+                    
                     chunk = DocumentChunk(
                         id=chunk_id,
                         content=metadata['content'],
                         document_id=metadata['document_id'],
                         metadata=metadata['metadata']
                     )
-                    score = 1.0 / (1.0 + distances[0][i])
-                    results.append(ChunkSearchResult(chunk=chunk, score=score))
+                    results.append(ChunkSearchResult(chunk=chunk, score=similarity))
             
             return results
         except Exception as e:
@@ -135,7 +161,6 @@ class FAISSVectorStore(IVectorStore):
                 for idx, chunk_id in enumerate(all_chunk_ids):
                     chunk_data = self._metadata[chunk_id]
                     if chunk_data['document_id'] != document_id:
-                        # Reconstruct vector from FAISS index (using its sequential index)
                         vector = self._index.reconstruct(idx)  # type: ignore
                         keepers.append((chunk_id, vector, chunk_data))
                 return keepers

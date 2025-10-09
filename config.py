@@ -49,6 +49,30 @@ class Settings(BaseSettings):
     SNIPPET_LENGTH: int = 300
     DEFAULT_SEARCH_RESULTS: int = 5
     
+    # ============= NEW: Search Quality Controls =============
+    # These settings improve search relevance by filtering weak matches
+    
+    SEARCH_SCORE_THRESHOLD: float = 0.70
+    """
+    Minimum similarity score (0.0-1.0) for results to be returned.
+    - 0.60-0.65: Lenient (more results, some weak matches)
+    - 0.70-0.75: Balanced (recommended for most use cases)
+    - 0.80-0.85: Strict (only very relevant matches)
+    
+    This threshold works consistently across FAISS and ChromaDB because
+    embeddings are L2-normalized and scores are unified to [0,1] scale.
+    """
+    
+    SEARCH_CANDIDATE_K: int = 15
+    """
+    Number of candidates to fetch before filtering (overfetch strategy).
+    Should be 2-3x larger than DEFAULT_SEARCH_RESULTS.
+    
+    Why: Ensures we find strong matches even if top-5 raw results are mediocre.
+    Example: Fetch 15 candidates, filter by threshold, keep best 5.
+    """
+    # ============= END: Search Quality Controls =============
+    
     # API settings
     REQUEST_TIMEOUT: int = 60
     MAX_SEARCH_RESULTS: int = 10  # Legacy setting
