@@ -19,7 +19,7 @@ import io
 import logging
 import uuid
 from abc import abstractmethod
-from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Callable, List, Optional, Tuple
 
 from PIL import Image
 
@@ -30,13 +30,10 @@ from core.interfaces import IDocumentProcessor, DocumentChunk, IPdfToImageConver
 from api.schemas import DocumentProcessingError, ErrorCode
 from config import settings
 
-# External helpers we introduced:
-# - utils.arabic_segmenter.segment_arabic: returns either List[str] or List[Tuple[str, kind]] or List[{"text":..., "kind":...}]
-# - infrastructure.line_builder.rebuild_text_from_boxes: rebuild lines from OCR boxes
+# External helpers
 try:
     from utils.arabic_segmenter import segment_arabic  # type: ignore
 except Exception:
-    # Fallback: pass-through segmentation
     def segment_arabic(text: str):
         return [text]
 
@@ -44,14 +41,12 @@ try:
     from infrastructure.line_builder import rebuild_text_from_boxes  # type: ignore
 except Exception:
     def rebuild_text_from_boxes(items, *, alpha_line: float = 0.7, beta_blank: float = 1.6) -> str:  # type: ignore
-        # Extremely small fallback: join tokens sorted by their insertion order.
         return " ".join(t for _, t, _ in items) if items else ""
-
 
 logger = logging.getLogger(settings.LOGGER_NAME)
 
 # -----------------------------
-# Utilities
+# Configuration
 # -----------------------------
 ARABIC_AWARE_SEPARATORS: List[str] = [
     "\n\n", "\n", ":", "؛", "؟", ".", "!", "،", " ", ""
@@ -64,10 +59,47 @@ PER_PAGE_TIMEOUT = getattr(settings, "OCR_TIMEOUT_SECONDS", 60)
 OCR_DPI = getattr(settings, "OCR_DPI", 300)
 IMAGE_EXTENSIONS = set(getattr(settings, "IMAGE_EXTENSIONS", [".png", ".jpg", ".jpeg"]))
 
-def _coerce_segment(part: Any) -> Tuple[str, str]:
-    """Accept segment as str | (text, kind) | dict and return (text, kind).
-    Defaults kind to 'paragraph' when unknown.
+# -----------------------------
+# Arabic Text Utilities
+# -----------------------------
+def _has_arabic(s: str) -> bool:
+    """Check if string contains Arabic characters."""
+    return any('\u0600' <= ch <= '\u06FF' for ch in s)
+
+def _has_latin(s: str) -> bool:
+    """Check if string contains Latin letters."""
+    return any(('A' <= ch <= 'Z') or ('a' <= ch <= 'z') for ch in s)
+
+def _needs_flip_paddle_ar_token(s: str) -> bool:
     """
+    PaddleOCR outputs Arabic tokens in LTR character order.
+    Flip tokens that are Arabic-only (no Latin letters).
+    """
+    return _has_arabic(s) and not _has_latin(s)
+
+def _flip_if_needed(s: str) -> str:
+    """Reverse string if it's a PaddleOCR Arabic token."""
+    return s[::-1] if _needs_flip_paddle_ar_token(s) else s
+
+def _wrap_bidi_for_display(s: str) -> str:
+    """
+    Wrap Arabic-dominant lines with RTL embedding marks for proper display.
+    U+202B (RLE) + text + U+202C (PDF) forces RTL rendering in LTR contexts.
+    """
+    lines = s.split("\n")
+    out = []
+    for ln in lines:
+        if _has_arabic(ln) and not _has_latin(ln):
+            out.append("\u202B" + ln + "\u202C")  # RTL embed
+        else:
+            out.append(ln)
+    return "\n".join(out)
+
+# -----------------------------
+# Document Utilities
+# -----------------------------
+def _coerce_segment(part: Any) -> Tuple[str, str]:
+    """Convert segment to (text, kind) tuple. Defaults kind to 'paragraph'."""
     if isinstance(part, tuple) and part:
         text = str(part[0]).strip()
         kind = str(part[1]).strip() if len(part) > 1 else "paragraph"
@@ -76,26 +108,12 @@ def _coerce_segment(part: Any) -> Tuple[str, str]:
         text = str(part.get("text", "")).strip()
         kind = str(part.get("kind", "paragraph")).strip() or "paragraph"
         return text, kind
-    # Fallback assume raw text
     return (str(part).strip(), "paragraph")
 
-
 def _is_atomic(doc: LangchainDocument) -> bool:
+    """Check if document segment is atomic (header/item) and shouldn't be merged."""
     kind = (doc.metadata or {}).get("segment_kind", "paragraph")
     return kind in {"item", "header"}
-
-
-def _has_arabic(s: str) -> bool:
-    return any('\u0600' <= ch <= '\u06FF' for ch in s)
-
-def _has_latin(s: str) -> bool:
-    return any(('A' <= ch <= 'Z') or ('a' <= ch <= 'z') for ch in s)
-
-def _needs_flip_paddle_ar_token(s: str) -> bool:
-    return _has_arabic(s) and not _has_latin(s)
-
-def _flip_if_needed(s: str) -> str:
-    return s[::-1] if _needs_flip_paddle_ar_token(s) else s
 
 # -----------------------------
 # Base Processor
@@ -135,6 +153,40 @@ class BaseOCRProcessor(IDocumentProcessor):
         progress_callback: Optional[Callable[[int, int], None]] = None
     ) -> List[DocumentChunk]:
         # 1) Build list of page images
+        images = await self._load_images(file_path, file_type)
+        total_pages = len(images)
+        
+        # 2) Extract text from each page
+        docs: List[LangchainDocument] = []
+        for i, image in enumerate(images):
+            self._update_progress(progress_callback, i + 1, total_pages)
+            
+            text = await self._extract_page_text(image, i + 1)
+            if not text:
+                continue
+            
+            # Structure-first segmentation
+            segments = self._segment_text(text, file_path, i + 1)
+            docs.extend(segments)
+
+        if not docs:
+            raise DocumentProcessingError(
+                "No text extracted from document",
+                ErrorCode.NO_TEXT_FOUND
+            )
+
+        # 3) Split, merge, and wrap
+        split_docs = self.text_splitter.split_documents(docs)
+        merged_docs = self._merge_tiny_paragraphs(split_docs)
+        
+        logger.info("Processed %d raw segments into %d chunks", len(docs), len(merged_docs))
+
+        # 4) Build final chunks with optional display wrapping
+        chunks = self._build_chunks(merged_docs)
+        return chunks
+
+    async def _load_images(self, file_path: str, file_type: str) -> List[Image.Image]:
+        """Load images from PDF or image file."""
         if file_type == "pdf":
             if not self.pdf_converter:
                 raise DocumentProcessingError(
@@ -142,7 +194,7 @@ class BaseOCRProcessor(IDocumentProcessor):
                     ErrorCode.PROCESSING_FAILED
                 )
             try:
-                images = await asyncio.to_thread(
+                return await asyncio.to_thread(
                     self.pdf_converter.convert, file_path, dpi=OCR_DPI
                 )
             except Exception as e:
@@ -151,131 +203,146 @@ class BaseOCRProcessor(IDocumentProcessor):
                     f"Failed to convert PDF to images: {e}",
                     ErrorCode.PROCESSING_FAILED
                 )
-        elif file_type.lower() in IMAGE_EXTENSIONS or any(file_path.lower().endswith(ext) for ext in IMAGE_EXTENSIONS):
+        
+        elif file_type.lower() in IMAGE_EXTENSIONS or any(
+            file_path.lower().endswith(ext) for ext in IMAGE_EXTENSIONS
+        ):
             try:
                 with Image.open(file_path) as img:
-                    images = [img.convert("RGB")]
+                    return [img.convert("RGB")]
             except Exception as e:
                 logger.exception("Failed opening image")
                 raise DocumentProcessingError(
                     f"Failed to open image: {e}",
                     ErrorCode.PROCESSING_FAILED
                 )
-        else:
-            raise DocumentProcessingError(
-                f"Unsupported file type: {file_type}",
-                ErrorCode.INVALID_FORMAT
-            )
+        
+        raise DocumentProcessingError(
+            f"Unsupported file type: {file_type}",
+            ErrorCode.INVALID_FORMAT
+        )
 
-        total_pages = len(images)
-        docs: List[LangchainDocument] = []
-
-        # 2) Per page OCR + structure-first segmentation
-        for i, image in enumerate(images):
-            # progress update
-            if progress_callback:
-                try:
-                    progress_callback(i + 1, total_pages)
-                except Exception:
-                    # Don't break OCR if UI progress fails
-                    pass
-
+    def _update_progress(
+        self, 
+        callback: Optional[Callable[[int, int], None]], 
+        current: int, 
+        total: int
+    ) -> None:
+        """Call progress callback if provided."""
+        if callback:
             try:
-                text = await asyncio.wait_for(
-                    self._extract_text_from_image(image),
-                    timeout=self.per_page_timeout_s
-                )
-            except asyncio.TimeoutError:
-                logger.warning("OCR timed out on page %d", i + 1)
-                raise DocumentProcessingError(
-                    f"OCR timeout on page {i+1}",
-                    ErrorCode.OCR_TIMEOUT
-                )
-            except RuntimeError as e:
-                # Allow caller/factory to catch engine-specific failures and fallback
-                raise
-            except Exception as e:
-                logger.exception("Unexpected OCR exception on page %d", i + 1)
-                raise DocumentProcessingError(
-                    f"OCR failed on page {i+1}: {e}",
-                    ErrorCode.PROCESSING_FAILED
-                )
-
-            if not text or not text.strip():
-                continue
-
-            # Structure-first segmentation (returns list of segments)
-            try:
-                parts = segment_arabic(text)
+                callback(current, total)
             except Exception:
-                # If segmenter fails, fallback to whole page
-                parts = [text]
+                pass  # Don't break OCR if UI progress fails
 
-            for part in parts:
-                seg_text, seg_kind = _coerce_segment(part)
-                if not seg_text:
-                    continue
-                docs.append(
-                    LangchainDocument(
-                        page_content=seg_text,
-                        metadata={
-                            "page": i + 1,
-                            "source": file_path,
-                            "segment_kind": seg_kind
-                        }
-                    )
-                )
-
-        if not docs:
+    async def _extract_page_text(self, image: Image.Image, page_num: int) -> str:
+        """Extract text from single page with timeout and error handling."""
+        try:
+            return await asyncio.wait_for(
+                self._extract_text_from_image(image),
+                timeout=self.per_page_timeout_s
+            )
+        except asyncio.TimeoutError:
+            logger.warning("OCR timed out on page %d", page_num)
             raise DocumentProcessingError(
-                "No text extracted from document",
-                ErrorCode.NO_TEXT_FOUND
+                f"OCR timeout on page {page_num}",
+                ErrorCode.OCR_TIMEOUT
+            )
+        except RuntimeError:
+            raise  # Allow caller to catch engine-specific failures
+        except Exception as e:
+            logger.exception("Unexpected OCR exception on page %d", page_num)
+            raise DocumentProcessingError(
+                f"OCR failed on page {page_num}: {e}",
+                ErrorCode.PROCESSING_FAILED
             )
 
-        # 3) Length split (only for long segments)
-        split_docs = self.text_splitter.split_documents(docs)
+    def _segment_text(
+        self, 
+        text: str, 
+        source: str, 
+        page: int
+    ) -> List[LangchainDocument]:
+        """Segment text into structured parts (headers, items, paragraphs)."""
+        try:
+            parts = segment_arabic(text)
+        except Exception:
+            parts = [text]  # Fallback to whole page
 
-        # 4) Tiny merge for paragraph-only continuations (protect atomic boundaries)
+        docs = []
+        for part in parts:
+            seg_text, seg_kind = _coerce_segment(part)
+            if not seg_text:
+                continue
+            docs.append(
+                LangchainDocument(
+                    page_content=seg_text,
+                    metadata={
+                        "page": page,
+                        "source": source,
+                        "segment_kind": seg_kind
+                    }
+                )
+            )
+        return docs
+
+    def _merge_tiny_paragraphs(
+        self, 
+        docs: List[LangchainDocument]
+    ) -> List[LangchainDocument]:
+        """Merge tiny paragraph continuations (protect atomic boundaries)."""
         merged: List[LangchainDocument] = []
-        for d in split_docs:
-            if (
+        
+        for doc in docs:
+            should_merge = (
                 merged
                 and len(merged[-1].page_content) < DEFAULT_MIN_CHUNK_CHARS
                 and not _is_atomic(merged[-1])
-                and not _is_atomic(d)
-                and (merged[-1].metadata or {}).get("segment_kind", "paragraph") == "paragraph"
-                and (d.metadata or {}).get("segment_kind", "paragraph") == "paragraph"
-            ):
-                merged[-1].page_content = (merged[-1].page_content.rstrip() + "\n" + d.page_content.lstrip()).strip()
-            else:
-                merged.append(d)
-
-        split_docs = merged
-
-        logger.info("Processed %d raw segments into %d chunks", len(docs), len(split_docs))
-
-        # 5) Build DocumentChunk payloads (document_id filled later in service)
-        chunks: List[DocumentChunk] = [
-            DocumentChunk(
-                id=f"{uuid.uuid4()}_{i}",
-                content=doc.page_content,
-                document_id="",
-                metadata={
-                    "page": (doc.metadata or {}).get("page", -1),
-                    "source": (doc.metadata or {}).get("source", ""),
-                    "segment_kind": (doc.metadata or {}).get("segment_kind", "paragraph")
-                }
+                and not _is_atomic(doc)
+                and (merged[-1].metadata or {}).get("segment_kind") == "paragraph"
+                and (doc.metadata or {}).get("segment_kind") == "paragraph"
             )
-            for i, doc in enumerate(split_docs)
-        ]
-        return chunks
+            
+            if should_merge:
+                merged[-1].page_content = (
+                    merged[-1].page_content.rstrip() + "\n" + 
+                    doc.page_content.lstrip()
+                ).strip()
+            else:
+                merged.append(doc)
+        
+        return merged
 
+    def _build_chunks(self, docs: List[LangchainDocument]) -> List[DocumentChunk]:
+        """Build final DocumentChunk objects with optional display wrapping."""
+        wrap_bidi = getattr(settings, "ARABIC_BIDI_WRAP_FOR_DISPLAY", False)
+        
+        chunks: List[DocumentChunk] = []
+        for i, doc in enumerate(docs):
+            content = doc.page_content
+            if wrap_bidi:
+                content = _wrap_bidi_for_display(content)
+            
+            chunks.append(
+                DocumentChunk(
+                    id=f"{uuid.uuid4()}_{i}",
+                    content=content,
+                    document_id="",  # Filled later in service
+                    metadata={
+                        "page": (doc.metadata or {}).get("page", -1),
+                        "source": (doc.metadata or {}).get("source", ""),
+                        "segment_kind": (doc.metadata or {}).get("segment_kind", "paragraph")
+                    }
+                )
+            )
+        return chunks
 
 # -----------------------------
 # Tesseract
 # -----------------------------
 class TesseractProcessor(BaseOCRProcessor):
-    """Tesseract OCR engine (ara+eng). Keeps original per-line layout reasonably well."""
+    """Tesseract OCR engine (ara+eng)."""
+    
     async def _extract_text_from_image(self, image: Image.Image) -> str:
         logger.info("Using TesseractProcessor")
         try:
@@ -288,18 +355,14 @@ class TesseractProcessor(BaseOCRProcessor):
         text = await asyncio.to_thread(
             pytesseract.image_to_string, image, lang="ara+eng"
         )
-        # pytesseract returns text with \n lines; leave as-is for segmenter
         return text
-
 
 # -----------------------------
 # EasyOCR
 # -----------------------------
 class EasyOCRProcessor(BaseOCRProcessor):
-    """
-    EasyOCR configured for line-aware output. We request detail=1 & paragraph=False,
-    then rebuild stable lines from bounding boxes using the shared line_builder helper.
-    """
+    """EasyOCR with line-aware output (detail=1, paragraph=False)."""
+    
     reader: Optional[Any] = None
 
     async def _init_reader(self) -> None:
@@ -310,19 +373,19 @@ class EasyOCRProcessor(BaseOCRProcessor):
                 raise RuntimeError(
                     "EasyOCR not installed. Run: pip install easyocr"
                 ) from e
-            # paragraph=False keeps tokens separate; we'll cluster into lines
+            
             EasyOCRProcessor.reader = easyocr.Reader(
-                getattr(settings, "OCR_LANGUAGES", ["ar", "en"]),
+                getattr(settings, "OCR_LANGUAGES", ["ar", "en"])
             )
 
     async def _extract_text_from_image(self, image: Image.Image) -> str:
         logger.info("Using EasyOCRProcessor")
         await self._init_reader()
+        
         img_bytes = io.BytesIO()
         image.save(img_bytes, format="PNG")
         img_bytes.seek(0)
 
-        # detail=1 -> [(bbox, text, conf), ...]; paragraph=False -> avoid pre-merged blocks
         result = await asyncio.to_thread(
             EasyOCRProcessor.reader.readtext,  # type: ignore[attr-defined]
             img_bytes.getvalue(),
@@ -330,7 +393,7 @@ class EasyOCRProcessor(BaseOCRProcessor):
             paragraph=False
         )
 
-        # Normalize to list of (bbox, text, conf)
+        # Extract items: (bbox, text, conf)
         items: List[Tuple[List[List[int]], str, float]] = []
         for entry in result or []:
             if not entry or len(entry) < 2:
@@ -341,177 +404,140 @@ class EasyOCRProcessor(BaseOCRProcessor):
             if text:
                 items.append((bbox, text, conf))
 
-        # Rebuild lines with preserved blank lines
-        text = rebuild_text_from_boxes(items)
-        return text
-
+        return rebuild_text_from_boxes(items)
 
 # -----------------------------
 # PaddleOCR
 # -----------------------------
 class PaddleOCRProcessor(BaseOCRProcessor):
     """
-    PaddleOCR with hardened initialization and the same line rebuild as EasyOCR.
-    If initialization fails (e.g., unsupported Python on Windows), _ensure_engine()
-    raises RuntimeError so the caller can fallback to other engines.
+    PaddleOCR with Arabic LTR token normalization.
+    Handles both dict and list result formats.
     """
+    
     def __init__(self, pdf_converter: Optional[IPdfToImageConverter] = None, **kwargs) -> None:
         super().__init__(pdf_converter, **kwargs)
         self._engine = None
-        
 
     def _ensure_engine(self) -> None:
-        # inside PaddleOCRProcessor._ensure_engine()
+        """Initialize PaddleOCR with version/platform checks."""
         import sys
 
         if self._engine is not None:
             return
+        
         try:
-            # Guard: current Windows wheels for PaddleOCR often don't support Python 3.13
             if sys.platform.startswith("win") and sys.version_info >= (3, 13):
                 raise RuntimeError(
                     "PaddleOCR is not supported on Python 3.13 on Windows. "
                     "Use Python 3.10 or 3.11 for PaddleOCR on Windows."
                 )
+            
             from paddleocr import PaddleOCR  # type: ignore
             self._engine = PaddleOCR(
                 use_angle_cls=True,
                 lang=getattr(settings, "PADDLE_OCR_LANG", "ar")
-                # NOTE: do NOT pass show_log here; some versions don't support it
             )
         except Exception as e:
             logger.exception("PaddleOCR initialization failed")
             self._engine = None
             raise RuntimeError(
                 "PaddleOCR initialization failed. Ensure a supported Python version "
-                "(3.10/3.11 on Windows) and install a compatible paddlepaddle/paddleocr."
+                "(3.10/3.11 on Windows) and install compatible paddlepaddle/paddleocr."
             ) from e
-
 
     async def _extract_text_from_image(self, image: Image.Image) -> str:
         logger.info("Using PaddleOCRProcessor")
         self._ensure_engine()
 
-        # Convert PIL Image to NumPy array (stable input format)
+        # Convert to NumPy array
         import numpy as np
         img_array = np.array(image.convert("RGB"))
 
-        # Call OCR without cls parameter
+        # Run OCR
         result = await asyncio.to_thread(self._engine.ocr, img_array)  # type: ignore
 
-        logger.info(f"Result type: {type(result)}")
+        # Extract items from result
+        items = self._parse_paddle_result(result)
         
+        # Fix Arabic LTR tokens (PaddleOCR quirk)
+        items = [(bbox, _flip_if_needed(text), conf) for (bbox, text, conf) in items]
+        
+        # Rebuild text with proper line ordering
+        return rebuild_text_from_boxes(items)
+
+    def _parse_paddle_result(
+        self, 
+        result: Any
+    ) -> List[Tuple[List[List[int]], str, float]]:
+        """
+        Parse PaddleOCR result (handles both dict and list formats).
+        Returns: [(bbox, text, conf), ...]
+        """
         items: List[Tuple[List[List[int]], str, float]] = []
 
-        def _arabic_heavy(s: str) -> bool:
-            # proportion of Arabic letters among all letters
-            letters = [ch for ch in s if ch.isalpha()]
-            if not letters:
-                return False
-            ar = sum(1 for ch in letters if '\u0600' <= ch <= '\u06FF')
-            return ar / len(letters) >= 0.6
-
-        def _fix_paddle_arabic_token(s: str) -> str:
-            # Some PaddleOCR builds output Arabic tokens in LTR order – flip once
-            return s[::-1] if _arabic_heavy(s) else s
-
-        # Apply just before calling rebuild_text_from_boxes(...)
-        items = [(bbox, _fix_paddle_arabic_token(text), conf) for (bbox, text, conf) in items]
-        
-        # Handle dict-based result format (newer PaddleOCR versions)
+        # Format 1: Direct dict
         if isinstance(result, dict):
-            logger.info(f"Dict keys: {list(result.keys())}")
-            result_dict = result
+            self._extract_from_dict(result, items)
+        
+        # Format 2: List (may contain dict or nested lists)
+        elif isinstance(result, list) and result:
+            first_page = result[0]
             
-            texts = (result_dict.get('rec_texts') or 
-                    result_dict.get('texts') or [])
-            scores = (result_dict.get('rec_scores') or 
-                    result_dict.get('scores') or [])
-            polys = (result_dict.get('rec_polys') or 
-                    result_dict.get('polys') or [])
+            if isinstance(first_page, dict):
+                # List of dicts (one per page)
+                self._extract_from_dict(first_page, items)
+            elif isinstance(first_page, list):
+                # Classic nested list format
+                self._extract_from_nested_list(result, items)
+        
+        logger.info(f"Extracted {len(items)} text items from PaddleOCR")
+        return items
+
+    def _extract_from_dict(
+        self, 
+        data: dict, 
+        items: List[Tuple[List[List[int]], str, float]]
+    ) -> None:
+        """Extract items from dict-based PaddleOCR result."""
+        texts = data.get('rec_texts') or data.get('texts') or []
+        scores = data.get('rec_scores') or data.get('scores') or []
+        polys = data.get('rec_polys') or data.get('polys') or []
+        
+        for i, text in enumerate(texts):
+            if not text or not text.strip():
+                continue
             
-            logger.info(f"Found {len(texts)} texts, {len(scores)} scores, {len(polys)} polys")
+            score = float(scores[i]) if i < len(scores) else 0.0
             
-            for i, text in enumerate(texts):
-                if not text or not text.strip():
+            if i < len(polys):
+                bbox_raw = polys[i]
+                bbox = bbox_raw.tolist() if hasattr(bbox_raw, 'tolist') else bbox_raw
+            else:
+                bbox = []
+            
+            if bbox and text.strip():
+                items.append((bbox, text.strip(), score))
+
+    def _extract_from_nested_list(
+        self, 
+        result: list, 
+        items: List[Tuple[List[List[int]], str, float]]
+    ) -> None:
+        """Extract items from classic nested list format."""
+        for page in result:
+            if not page:
+                continue
+            for detection in page:
+                if not detection or len(detection) < 2:
                     continue
                 
-                score = float(scores[i]) if i < len(scores) else 0.0
+                bbox = detection[0]
+                text_conf = detection[1]
                 
-                if i < len(polys):
-                    bbox_raw = polys[i]
-                    bbox = bbox_raw.tolist() if hasattr(bbox_raw, 'tolist') else bbox_raw
-                else:
-                    bbox = []
-                
-                if bbox and text.strip():
-                    items.append((bbox, text.strip(), score))
-        
-        # Handle list format
-        elif isinstance(result, list):
-            logger.info(f"List format with {len(result)} pages")
-            
-            # DEBUG: Show structure
-            if result:
-                first_page = result[0]
-                logger.info(f"First page type: {type(first_page)}")
-                logger.info(f"First page is dict: {isinstance(first_page, dict)}")
-                
-                # If first page is a dict, it's the new format!
-                if isinstance(first_page, dict):
-                    logger.info(f"First page keys: {list(first_page.keys())}")
+                if isinstance(text_conf, (list, tuple)) and len(text_conf) >= 1:
+                    text = text_conf[0] if isinstance(text_conf[0], str) else str(text_conf[0])
+                    conf = float(text_conf[1]) if len(text_conf) > 1 else 0.0
                     
-                    # Extract from dict format
-                    texts = first_page.get('rec_texts', [])
-                    scores = first_page.get('rec_scores', [])
-                    polys = first_page.get('rec_polys', [])
-                    
-                    logger.info(f"Found {len(texts)} texts in dict")
-                    
-                    for i, text in enumerate(texts):
-                        if not text or not text.strip():
-                            continue
-                        
-                        score = float(scores[i]) if i < len(scores) else 0.0
-                        
-                        if i < len(polys):
-                            bbox_raw = polys[i]
-                            bbox = bbox_raw.tolist() if hasattr(bbox_raw, 'tolist') else bbox_raw
-                        else:
-                            bbox = []
-                        
-                        if bbox and text.strip():
-                            items.append((bbox, text.strip(), score))
-                
-                # Classic nested list format
-                elif isinstance(first_page, list):
-                    logger.info(f"First page length: {len(first_page)}")
-                    if first_page:
-                        logger.info(f"First detection: {first_page[0]}")
-                    
-                    for page in result:
-                        if not page:
-                            continue
-                        for detection in page:
-                            if not detection or len(detection) < 2:
-                                continue
-                            
-                            bbox = detection[0]
-                            text_conf = detection[1]
-                            
-                            if isinstance(text_conf, (list, tuple)) and len(text_conf) >= 1:
-                                text = text_conf[0] if isinstance(text_conf[0], str) else str(text_conf[0])
-                                conf = float(text_conf[1]) if len(text_conf) > 1 else 0.0
-                                
-                                if text and text.strip():
-                                    items.append((bbox, text, conf))
-        
-        logger.info(f"Total extracted: {len(items)} text items from PaddleOCR")
-        
-        if not items:
-            logger.error("No items extracted!")
-            logger.error(f"Result structure: {result}")
-        
-        items = [(bbox, _flip_if_needed(text), conf) for (bbox, text, conf) in items]
-        text = rebuild_text_from_boxes(items)
-        return text
+                    if text and text.strip():
+                        items.append((bbox, text, conf))
