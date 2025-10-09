@@ -1,7 +1,11 @@
-# core/enums.py
+# core/domain.py
 """Shared enumerations used across the application."""
 from enum import Enum
 
+from dataclasses import dataclass
+from typing import List, Dict, Any, Optional
+
+# ============= Enums =============
 
 class ErrorCode(str, Enum):
     """Error codes for user-facing error messages."""
@@ -35,3 +39,31 @@ class DocumentResponseStatus(str, Enum):
     """Status for document upload response."""
     PROCESSING = "processing"  # Upload accepted, processing in background
     ERROR = "error"             # Upload or validation failed
+
+
+
+# ============= Domain Models =============
+
+@dataclass
+class ProcessedDocument:
+    """Domain model for documents"""
+    id: str
+    filename: str
+    file_hash: str
+    metadata: Dict[str, Any]
+
+@dataclass  
+class DocumentChunk:
+    """Domain model for document chunks"""
+    id: str
+    content: str
+    document_id: str
+    metadata: Dict[str, Any]
+    embedding: Optional[List[float]] = None # Vector of float numbers
+
+@dataclass
+class ChunkSearchResult:
+    """Domain model for search results"""
+    chunk: DocumentChunk
+    score: float
+    highlights: Optional[List[str]] = None

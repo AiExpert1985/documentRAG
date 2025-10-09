@@ -9,7 +9,7 @@ import faiss
 import numpy as np
 
 from core.interfaces import IVectorStore, DocumentChunk
-from core.models import ChunkSearchResult
+from core.domain import ChunkSearchResult
 from config import settings
 
 logger = logging.getLogger(settings.LOGGER_NAME)

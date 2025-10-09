@@ -8,7 +8,7 @@ import chromadb
 from chromadb.utils.embedding_functions import SentenceTransformerEmbeddingFunction
 
 from core.interfaces import IVectorStore, DocumentChunk
-from core.models import ChunkSearchResult
+from core.domain import ChunkSearchResult
 
 from config import settings
 

@@ -2,7 +2,7 @@
 from pydantic import BaseModel, HttpUrl
 from typing import Optional, List
 
-from core.enums import DocumentResponseStatus, ErrorCode, ProcessingStatus
+from core.domain import DocumentResponseStatus, ErrorCode, ProcessingStatus
 
 class Message(BaseModel):
     sender: str

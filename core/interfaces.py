@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from fastapi import UploadFile, Request
 
 from api.schemas import DocumentsListItem, ProcessDocumentResponse
-from core.models import ChunkSearchResult, DocumentChunk, ProcessedDocument 
+from core.domain import ChunkSearchResult, DocumentChunk, ProcessedDocument 
 
 # ============= Vector Store Interface =============
 class IVectorStore(ABC):

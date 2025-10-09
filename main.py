@@ -6,7 +6,7 @@ from fastapi import FastAPI
 
 from config import settings
 from services.logger_config import setup_logging
-from database.models import Base, async_engine
+from database.session import Base, async_engine
 from api.endpoints import router
 from services.async_processor import async_processor
 

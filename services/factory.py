@@ -4,7 +4,7 @@ import chromadb
 from sqlalchemy.ext.asyncio import AsyncSession
 from fastapi import Depends
 
-from database.dependencies import get_db
+from database.session import get_db
 from config import settings
 from core.interfaces import (
     IRAGService, IVectorStore, IEmbeddingService, 

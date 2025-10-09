@@ -1,3 +1,5 @@
+# utils/common.py
+
 import hashlib
 import re
 import os
@@ -7,6 +9,9 @@ from fastapi import UploadFile, HTTPException
 
 import logging
 from config import settings
+
+
+# ============= Utis =============
 
 logger = logging.getLogger(settings.LOGGER_NAME)
 
@@ -63,3 +68,43 @@ def sanitize_filename(filename: str) -> str:
 def get_file_extension(filename: str) -> str:
     """Extracts and normalizes the file extension from a filename."""
     return Path(filename).suffix[1:].lower()
+
+
+
+
+def get_project_root() -> str:
+    """Returns the absolute path to the project's root directory."""
+    # This assumes this file is in project_root/utils/paths.py
+    return os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+
+def get_log_file_path() -> str:
+    """
+    Creates the log directory if it doesn't exist and returns the full log file path.
+    """
+    project_root = get_project_root()
+    log_dir = os.path.join(project_root, 'log')
+    
+    if not os.path.exists(log_dir):
+        os.makedirs(log_dir)
+        
+    return os.path.join(log_dir, 'rag_system.log')
+
+
+# ============= Paths =============
+
+def get_project_root() -> str:
+    """Returns the absolute path to the project's root directory."""
+    # This assumes this file is in project_root/utils/paths.py
+    return os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+
+def get_log_file_path() -> str:
+    """
+    Creates the log directory if it doesn't exist and returns the full log file path.
+    """
+    project_root = get_project_root()
+    log_dir = os.path.join(project_root, 'log')
+    
+    if not os.path.exists(log_dir):
+        os.makedirs(log_dir)
+        
+    return os.path.join(log_dir, 'rag_system.log')

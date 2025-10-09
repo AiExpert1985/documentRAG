@@ -7,8 +7,8 @@ from sqlalchemy import select, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.interfaces import IDocumentRepository, IMessageRepository 
-from core.models import ChunkSearchResult, ProcessedDocument 
-from database.models import DocumentEntity, MessageEntity
+from core.domain import ChunkSearchResult, ProcessedDocument 
+from database.session import DocumentEntity, MessageEntity
 from config import settings
 
 logger = logging.getLogger(settings.LOGGER_NAME)

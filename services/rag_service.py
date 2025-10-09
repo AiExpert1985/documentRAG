@@ -11,16 +11,16 @@ from api.schemas import (
     ProcessDocumentResponse, ErrorCode, ProcessingStatus, 
     DocumentProcessingError, DocumentsListItem
 )
-from core.enums import DocumentResponseStatus
+from core.domain import DocumentResponseStatus
 from core.interfaces import (
     IDocumentProcessor, IRAGService, IVectorStore, IEmbeddingService, 
     IDocumentRepository, IMessageRepository, IFileStorage, DocumentChunk
 )
-from core.models import ChunkSearchResult, ProcessedDocument
+from core.domain import ChunkSearchResult, ProcessedDocument
 from services.document_processor_factory import DocumentProcessorFactory
-from database.session_factory import get_session  # NEW
+from database.session import get_session  # NEW
 from infrastructure.repositories import SQLDocumentRepository  # NEW
-from utils.helpers import (
+from utils.common import (
     get_file_extension, get_file_hash, sanitize_filename, 
     validate_file_content, validate_uploaded_file
 )

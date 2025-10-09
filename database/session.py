@@ -1,4 +1,4 @@
-# database/models.py
+# database/session.py
 
 import logging
 import uuid
@@ -10,9 +10,17 @@ from sqlalchemy.orm import declarative_base
 
 from config import settings
 
+from typing import AsyncGenerator
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from contextlib import asynccontextmanager
+from typing import AsyncGenerator
+
+
+# ============= Models =============
+
 logger = logging.getLogger(settings.LOGGER_NAME)
 
-#✅
 # Setup SQLAlchemy async engine and session maker
 async_engine = create_async_engine(
     settings.DATABASE_URL, 
@@ -27,7 +35,6 @@ Base = declarative_base()
 
 # --- SQLAlchemy Models ---
 
-# ✅
 class MessageEntity(Base):
     __tablename__ = "messages"
     id = Column(Integer, primary_key=True, index=True)
@@ -35,7 +42,6 @@ class MessageEntity(Base):
     content = Column(String, nullable=False)
     timestamp = Column(DateTime, default=datetime.utcnow)
 
-# ✅
 class DocumentEntity(Base):
     __tablename__ = "documents"
     id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
@@ -45,3 +51,32 @@ class DocumentEntity(Base):
     stored_filename = Column(String, nullable=False, unique=True)
     timestamp = Column(DateTime, default=datetime.utcnow)
 
+
+# ============= Dependencies =============
+
+async def get_db() -> AsyncGenerator[AsyncSession, None]:
+    """Provide database session for FastAPI dependency injection"""
+    async with AsyncSessionLocal() as session:
+        try:
+            yield session
+        finally:
+            await session.close()
+
+# ============= Session Factory =============
+
+@asynccontextmanager
+async def get_session() -> AsyncGenerator[AsyncSession, None]:
+    """
+    Create a new database session with proper cleanup.
+    
+    Used by background processors where request-scoped sessions are unavailable.
+    Ensures proper rollback on errors and explicit closure.
+    """
+    async with AsyncSessionLocal() as session:
+        try:
+            yield session
+        except Exception:
+            await session.rollback()
+            raise
+        finally:
+            await session.close()

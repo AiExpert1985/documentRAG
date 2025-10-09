@@ -2,7 +2,7 @@
 """Simple in-memory progress tracking with size limit"""
 from typing import Dict, Optional
 from datetime import datetime, timezone
-from core.enums import ProcessingStatus, ErrorCode
+from core.domain import ProcessingStatus, ErrorCode
 
 
 class ProgressStore:

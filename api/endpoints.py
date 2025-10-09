@@ -12,7 +12,7 @@ from api.schemas import (
     ProcessDocumentResponse, SearchResponse, StatusResponse, 
     DocumentsListResponse, DeleteResponse, ChatRequest
 )
-from utils.helpers import validate_document_id
+from utils.common import validate_document_id
 
 from api.schemas import ProcessingProgress
 from infrastructure.progress_store import progress_store

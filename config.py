@@ -2,7 +2,7 @@
 """Enhanced configuration with new settings"""
 from typing import List
 from pydantic_settings import BaseSettings
-from utils.paths import get_log_file_path, get_project_root
+from utils.common import get_log_file_path, get_project_root
 
 class Settings(BaseSettings):
     """Application configuration"""
