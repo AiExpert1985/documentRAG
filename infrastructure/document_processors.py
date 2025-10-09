@@ -314,20 +314,14 @@ class BaseOCRProcessor(IDocumentProcessor):
         return merged
 
     def _build_chunks(self, docs: List[LangchainDocument]) -> List[DocumentChunk]:
-        """Build final DocumentChunk objects with optional display wrapping."""
-        wrap_bidi = getattr(settings, "ARABIC_BIDI_WRAP_FOR_DISPLAY", False)
-        
+        """Build final DocumentChunk objects (clean content, no display formatting)."""
         chunks: List[DocumentChunk] = []
         for i, doc in enumerate(docs):
-            content = doc.page_content
-            if wrap_bidi:
-                content = _wrap_bidi_for_display(content)
-            
             chunks.append(
                 DocumentChunk(
                     id=f"{uuid.uuid4()}_{i}",
-                    content=content,
-                    document_id="",  # Filled later in service
+                    content=doc.page_content,  # Clean content
+                    document_id="",
                     metadata={
                         "page": (doc.metadata or {}).get("page", -1),
                         "source": (doc.metadata or {}).get("source", ""),
