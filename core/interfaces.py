@@ -229,3 +229,32 @@ class IPdfToImageConverter(ABC):
     def convert(self, file_path: str, dpi: int = 300) -> List[Any]:
         """Converts a PDF file to a list of images."""
         pass
+
+
+# ============= Semantic Reranking =============
+
+class IReranker(ABC):
+    """
+    Interface for semantic reranking of search results.
+    Allows swapping reranker implementations (cross-encoder, APIs, custom models).
+    """
+    
+    @abstractmethod
+    async def rerank(
+        self, 
+        query: str, 
+        results: List['ChunkSearchResult'], 
+        top_k: int = 5
+    ) -> List['ChunkSearchResult']:
+        """
+        Rerank search results by semantic relevance.
+        
+        Args:
+            query: Search query
+            results: Initial results from vector search
+            top_k: Maximum results to return
+            
+        Returns:
+            Reranked results (sorted by relevance)
+        """
+        pass

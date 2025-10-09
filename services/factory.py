@@ -7,7 +7,7 @@ from fastapi import Depends
 from database.session import get_db
 from config import settings
 from core.interfaces import (
-    IRAGService, IVectorStore, IEmbeddingService, 
+    IRAGService, IVectorStore, IEmbeddingService, IReranker,
     IDocumentRepository, IMessageRepository, IFileStorage
 )
 from infrastructure.faiss_store import FAISSVectorStore
@@ -17,6 +17,8 @@ from infrastructure.repositories import SQLDocumentRepository, SQLMessageReposit
 from infrastructure.file_storage import LocalFileStorage
 from services.rag_service import RAGService
 from services.document_processor_factory import DocumentProcessorFactory
+
+from infrastructure.reranker import CrossEncoderReranker
 
 # Provider functions for each component
 def get_vector_store() -> IVectorStore:
@@ -56,26 +58,29 @@ def get_message_repository(session: AsyncSession = Depends(get_db)) -> IMessageR
     """Create message repository with injected session."""
     return SQLMessageRepository(session)
 
-# Main service provider using FastAPI DI
+
+def get_reranker() -> Optional[IReranker]:
+    """Create reranker if enabled in config."""
+    if not settings.RERANK_ENABLED:
+        return None
+    return CrossEncoderReranker(settings.RERANK_MODEL_NAME)
+
+# Update get_rag_service to inject reranker:
 def get_rag_service(
     vector_store: IVectorStore = Depends(get_vector_store),
     embedding_service: IEmbeddingService = Depends(get_embedding_service),
     doc_processor_factory: DocumentProcessorFactory = Depends(get_document_processor_factory),
     file_storage: IFileStorage = Depends(get_file_storage),
     document_repo: IDocumentRepository = Depends(get_document_repository),
-    message_repo: IMessageRepository = Depends(get_message_repository)
+    message_repo: IMessageRepository = Depends(get_message_repository),
+    reranker: IReranker = Depends(get_reranker)  # NEW
 ) -> IRAGService:
-    """
-    Create RAG service with full dependency injection.
-    
-    FastAPI automatically provides all dependencies based on their providers.
-    Easy to override individual components for testing.
-    """
     return RAGService(
         vector_store=vector_store,
         doc_processor_factory=doc_processor_factory,
         embedding_service=embedding_service,
         file_storage=file_storage,
         document_repo=document_repo,
-        message_repo=message_repo
+        message_repo=message_repo,
+        reranker=reranker  # NEW
     )

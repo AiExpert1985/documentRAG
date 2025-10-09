@@ -13,7 +13,7 @@ from api.schemas import (
 )
 from core.domain import DocumentResponseStatus
 from core.interfaces import (
-    IDocumentProcessor, IRAGService, IVectorStore, IEmbeddingService, 
+    IDocumentProcessor, IRAGService, IReranker, IVectorStore, IEmbeddingService, 
     IDocumentRepository, IMessageRepository, IFileStorage, DocumentChunk
 )
 from core.domain import ChunkSearchResult, ProcessedDocument
@@ -27,6 +27,8 @@ from utils.common import (
 from infrastructure.progress_store import progress_store
 from services.async_processor import async_processor
 
+from utils.arabic_text import has_keyword_match
+
 from config import settings
 
 logger = logging.getLogger(__name__)
@@ -39,7 +41,8 @@ class RAGService(IRAGService):
         embedding_service: IEmbeddingService,
         file_storage: IFileStorage,
         document_repo: IDocumentRepository,
-        message_repo: IMessageRepository
+        message_repo: IMessageRepository,
+        reranker: Optional[IReranker] = None
     ):
         self.document_repo = document_repo
         self.message_repo = message_repo
@@ -47,6 +50,7 @@ class RAGService(IRAGService):
         self.doc_processor_factory = doc_processor_factory
         self.embedding_service = embedding_service
         self.file_storage = file_storage
+        self.reranker = reranker  # NEW
 
     # ============ VALIDATION & PREPARATION ============
     
@@ -395,67 +399,78 @@ class RAGService(IRAGService):
 
     async def search(self, query: str, top_k: int = 5) -> List[ChunkSearchResult]:
         """
-        Search with quality filtering: overfetch → threshold → sort → trim.
+        Hybrid search: Dense → Lexical → Rerank.
         
-        CHANGED: Implements robust relevance filtering strategy:
-        1. Fetch more candidates than needed (15 vs 5) to find strong matches
-        2. Filter by similarity threshold (0.70 default) to remove weak results
-        3. Sort by score (highest first) for best ordering
-        4. Trim to top_k to respect user's result limit
-        5. Return empty list if nothing passes threshold (handled gracefully by API)
-        
-        Why overfetch (SEARCH_CANDIDATE_K > top_k):
-        - Vector stores return *nearest* neighbors, not necessarily *relevant* ones
-        - Top-5 raw results might all be mediocre (scores 0.45-0.60)
-        - Fetching 15 candidates increases chance of finding 2-3 strong matches (0.70+)
-        - After filtering weak results, we keep the best up to top_k
-        
-        Result: User sees 0-5 highly relevant results, never weak matches.
+        Pipeline:
+        1. Dense retrieval (broad recall)
+        2. Basic filters (existence + threshold)
+        3. Lexical gate (keyword matching)
+        4. Neural rerank (semantic precision)
         """
         try:
+            # Stage 1: Dense retrieval
             query_embedding = await self.embedding_service.generate_query_embedding(query)
-            
-            # ============= NEW: Overfetch Strategy =============
-            # Fetch more candidates than we'll display (robust retrieval)
-            candidate_k = max(top_k, settings.SEARCH_CANDIDATE_K)
+            candidate_k = max(top_k * 2, settings.SEARCH_CANDIDATE_K)
             raw_results = await self.vector_store.search(query_embedding, candidate_k)
             
-            # Filter 1: Keep only chunks from documents that still exist in DB
-            # (Safety check: vector store might have stale data after deletions)
+            # Stage 2: Basic filters
             existing_docs = await self.document_repo.list_all()
             existing_ids = {doc.id for doc in existing_docs}
             
-            # Filter 2: Apply similarity threshold (remove weak matches)
             threshold = settings.SEARCH_SCORE_THRESHOLD
             filtered_results = [
-                r for r in raw_results 
+                r for r in raw_results
                 if r.chunk.document_id in existing_ids and r.score >= threshold
             ]
             
-            # Sort by score (descending) and trim to requested top_k
-            filtered_results.sort(key=lambda r: r.score, reverse=True)
-            final_results = filtered_results[:top_k]
-            # ============= END: Overfetch Strategy =============
+            if not filtered_results:
+                await self.message_repo.save_search_results(query, [])
+                return []
             
-            # Log quality metrics for tuning/debugging
+            # Stage 3: Lexical gate (robust Arabic handling)
+            candidates = filtered_results
+            if settings.LEXICAL_GATE_ENABLED:
+                min_keywords = settings.LEXICAL_MIN_KEYWORDS
+                candidates_with_keywords = [
+                    r for r in filtered_results
+                    if has_keyword_match(query, r.chunk.content, min_keywords)
+                ]
+                if candidates_with_keywords:
+                    candidates = candidates_with_keywords
+            
+            # Stage 4: Neural reranker
+            final_results = candidates
+            if settings.RERANK_ENABLED and self.reranker:
+                rerank_top_k = min(settings.RERANK_TOP_K, len(candidates))
+                reranked = await self.reranker.rerank(query, candidates[:rerank_top_k], top_k * 2)
+                
+                rerank_threshold = settings.RERANK_SCORE_THRESHOLD
+                final_results = [
+                    r for r in reranked 
+                    if r.score >= rerank_threshold
+                ][:top_k]
+            else:
+                candidates.sort(key=lambda r: r.score, reverse=True)
+                final_results = candidates[:top_k]
+            
+            # Logging & save
             if final_results:
                 scores = [r.score for r in final_results]
                 logger.info(
-                    f"Search: Returned {len(final_results)}/{len(raw_results)} results "
-                    f"(threshold={threshold:.2f}, scores: {min(scores):.3f}-{max(scores):.3f})"
-                )
-            else:
-                logger.info(
-                    f"Search: 0 results above threshold {threshold:.2f} "
-                    f"(fetched {len(raw_results)} candidates)"
+                    f"[SEARCH] raw={len(raw_results)} filtered={len(filtered_results)} "
+                    f"lexical={len(candidates)} final={len(final_results)} | "
+                    f"scores={min(scores):.3f}-{max(scores):.3f}"
                 )
             
             await self.message_repo.save_search_results(query, final_results)
             return final_results
             
         except Exception as e:
-            logger.error(f"Search failed: {e}")
+            logger.error(f"[SEARCH] Failed: {e}", exc_info=True)
             return []
+
+ 
+ 
 
     async def delete_document(self, document_id: str) -> bool:
         """Delete a document and its chunks"""

@@ -88,6 +88,19 @@ class Settings(BaseSettings):
     # Document processing
     ARABIC_BIDI_WRAP_FOR_DISPLAY: bool = True  # Add RTL markers for display
 
+
+    # Search quality controls
+    SEARCH_CANDIDATE_K: int = 40
+    SEARCH_SCORE_THRESHOLD: float = 0.72
+    
+    LEXICAL_GATE_ENABLED: bool = True
+    LEXICAL_MIN_KEYWORDS: int = 1
+    
+    RERANK_ENABLED: bool = True
+    RERANK_MODEL_NAME: str = "cross-encoder/ms-marco-MiniLM-L-6-v2"
+    RERANK_SCORE_THRESHOLD: float = 0.50
+    RERANK_TOP_K: int = 15
+
     class Config:
         env_file = ".env"
         env_file_encoding = "utf-8"
