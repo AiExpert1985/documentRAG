@@ -2,7 +2,7 @@
 """Database repository implementations"""
 import json
 import logging
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Set
 from sqlalchemy import select, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -21,14 +21,17 @@ class SQLDocumentRepository(IDocumentRepository):
         """Converts an SQLAlchemy entity to a domain model."""
         if db_doc is None:
             return None
+        
+        # Prevent accidental mutation of DB entity metadata
+        md = (db_doc.metadata or {}).copy()
+        md.setdefault("timestamp", db_doc.timestamp.isoformat())
+        md.setdefault("stored_filename", db_doc.stored_filename)
+        
         return ProcessedDocument(
-            id=db_doc.id,  # type: ignore
-            filename=db_doc.filename,  # type: ignore
-            file_hash=db_doc.file_hash,  # type: ignore
-            metadata={
-                "timestamp": db_doc.timestamp.isoformat(),
-                "stored_filename": db_doc.stored_filename
-            }
+            id=db_doc.id, # type: ignore
+            filename=db_doc.filename, # type: ignore
+            file_hash=db_doc.file_hash, # type: ignore
+            metadata=md
         )
 
     async def create(self, document_id: str, filename: str, file_hash: str, 
@@ -63,7 +66,7 @@ class SQLDocumentRepository(IDocumentRepository):
         db_doc = await self.session.get(DocumentEntity, document_id)  # ✅ Get ORM entity
         if not db_doc:
             return False
-        db_doc.metadata = metadata or {}  # ✅ Modify ORM entity
+        db_doc.meta = metadata or {}  # ✅ Modify ORM entity
         await self.session.commit()
         return True
 
@@ -92,6 +95,19 @@ class SQLDocumentRepository(IDocumentRepository):
             await self.session.rollback()
             logger.error(f"Failed to clear documents: {e}")
             return False
+        
+    async def exists_bulk(self, document_ids: List[str]) -> Set[str]:
+        """
+        Check which document IDs exist in database.
+        Single query replaces N individual lookups.
+        """
+        if not document_ids:
+            return set()
+        
+        result = await self.session.execute(
+            select(DocumentEntity.id).where(DocumentEntity.id.in_(list(document_ids)))
+        )
+        return {row[0] for row in result}
 
 class SQLMessageRepository(IMessageRepository):
     def __init__(self, session: AsyncSession):

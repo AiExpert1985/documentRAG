@@ -1,7 +1,7 @@
 # core/interfaces.py
 """Core interfaces for the RAG system"""
 from abc import ABC, abstractmethod
-from typing import Callable, List, Dict, Any, Optional, Tuple
+from typing import Callable, List, Dict, Any, Optional, Set, Tuple
 from dataclasses import dataclass
 from fastapi import UploadFile, Request
 
@@ -122,6 +122,14 @@ class IDocumentRepository(ABC):
     @abstractmethod
     async def delete_all(self) -> bool:
         """Delete all documents"""
+        pass
+
+    @abstractmethod
+    async def exists_bulk(self, document_ids: List[str]) -> Set[str]:
+        """
+        Return set of existing document IDs from provided list.
+        Used for efficient existence checking without loading all documents.
+        """
         pass
 
 class IMessageRepository(ABC):

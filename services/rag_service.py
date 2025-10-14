@@ -438,8 +438,11 @@ class RAGService(IRAGService):
             raw_results = await self.vector_store.search(query_embedding, candidate_k)
             
             # Stage 2: Basic filters
-            existing_docs = await self.document_repo.list_all()
-            existing_ids = {doc.id for doc in existing_docs}
+            if raw_results:
+                doc_ids = {r.chunk.document_id for r in raw_results}
+                existing_ids = await self.document_repo.exists_bulk(list(doc_ids))
+            else:
+                existing_ids = set()
             
             threshold = settings.SEARCH_SCORE_THRESHOLD
             filtered_results = [

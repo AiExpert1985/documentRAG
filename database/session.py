@@ -4,13 +4,13 @@ import logging
 import uuid
 from datetime import datetime
 
-from sqlalchemy import Column, DateTime, Integer, String, select
+from sqlalchemy import JSON, Column, DateTime, Integer, String, select
 from sqlalchemy.ext.asyncio import (async_sessionmaker, create_async_engine)
-from sqlalchemy.orm import declarative_base
+from sqlalchemy.orm import declarative_base, Mapped, mapped_column
 
 from config import settings
 
-from typing import AsyncGenerator
+from typing import Any, AsyncGenerator, Dict
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from contextlib import asynccontextmanager
@@ -50,6 +50,8 @@ class DocumentEntity(Base):
     # CHANGED: Add a column to store the secure filename on disk
     stored_filename = Column(String, nullable=False, unique=True)
     timestamp = Column(DateTime, default=datetime.utcnow)
+    # Python attr 'meta' → DB column named 'metadata'
+    meta: Mapped[Dict[str, Any]] = mapped_column("metadata", JSON, default=dict)
 
 
 # ============= Dependencies =============
