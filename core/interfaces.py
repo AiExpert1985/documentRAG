@@ -1,12 +1,12 @@
 # core/interfaces.py
 """Core interfaces for the RAG system"""
 from abc import ABC, abstractmethod
-from typing import Callable, List, Dict, Any, Optional
+from typing import Callable, List, Dict, Any, Optional, Tuple
 from dataclasses import dataclass
 from fastapi import UploadFile, Request
 
 from api.schemas import DocumentsListItem, ProcessDocumentResponse
-from core.domain import ChunkSearchResult, DocumentChunk, ProcessedDocument 
+from core.domain import ChunkSearchResult, DocumentChunk, PageSearchResult, ProcessedDocument 
 
 # ============= Vector Store Interface =============
 class IVectorStore(ABC):
@@ -53,6 +53,12 @@ class IDocumentProcessor(ABC):
         progress_callback(current_page, total_pages) called per page if provided.
         """
         pass
+
+    @abstractmethod
+    async def load_images(self, file_path: str, file_type: str) -> List[Any]:
+        """Load images from file (PDF or image file)."""
+        pass
+
 # ============= Embedding Service Interface =============
 class IEmbeddingService(ABC):
     """Interface for embedding generation"""
@@ -181,9 +187,21 @@ class IFileStorage(ABC):
         """Delete a stored file."""
         pass
 
+    @abstractmethod
+    async def save_page_image(
+        self, 
+        image: Any, 
+        document_id: str, 
+        page_number: int
+    ) -> Tuple[str, str]:
+        """Save page image and thumbnail. Returns (original_path, thumb_path)."""
+        pass
+
 # ============= Service Layer Interfaces =============
 class IRAGService(ABC):
     """High-level RAG operations interface"""
+
+    document_repo: IDocumentRepository
 
     @abstractmethod
     async def get_status(self) -> Dict[str, Any]:

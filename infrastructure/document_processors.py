@@ -153,7 +153,7 @@ class BaseOCRProcessor(IDocumentProcessor):
         progress_callback: Optional[Callable[[int, int], None]] = None
     ) -> List[DocumentChunk]:
         # 1) Build list of page images
-        images = await self._load_images(file_path, file_type)
+        images = await self.load_images(file_path, file_type)
         total_pages = len(images)
         
         # 2) Extract text from each page
@@ -185,7 +185,7 @@ class BaseOCRProcessor(IDocumentProcessor):
         chunks = self._build_chunks(merged_docs)
         return chunks
 
-    async def _load_images(self, file_path: str, file_type: str) -> List[Image.Image]:
+    async def load_images(self, file_path: str, file_type: str) -> List[Image.Image]:
         """Load images from PDF or image file."""
         if file_type == "pdf":
             if not self.pdf_converter:

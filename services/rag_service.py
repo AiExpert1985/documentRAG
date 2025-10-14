@@ -4,6 +4,7 @@ import logging
 from typing import List, Dict, Any, Optional, Tuple
 from pathlib import Path
 from uuid import uuid4
+from PIL import Image
 
 from fastapi import UploadFile, Request, HTTPException
 from pydantic import HttpUrl
@@ -31,6 +32,9 @@ from services.async_processor import async_processor
 from utils.arabic_text import has_keyword_match
 
 from config import settings
+
+import shutil
+import asyncio
 
 logger = logging.getLogger(__name__)
 
@@ -183,7 +187,7 @@ class RAGService(IRAGService):
     
     async def _store_chunks(self, chunks: List[DocumentChunk], doc_id: str) -> None:
         """
-        Store chunks in vector database. Progress: 80%.
+        Store chunks in vector database. Progress: 80-95%.
         Raises DocumentProcessingError if storage fails.
         """
         progress_store.update(doc_id, ProcessingStatus.STORING, 80, 
@@ -195,6 +199,9 @@ class RAGService(IRAGService):
                 "Failed to store vectors", 
                 ErrorCode.PROCESSING_FAILED
             )
+
+        progress_store.update(doc_id, ProcessingStatus.STORING, 95,
+                            "Storage complete")
     
     # ============ CLEANUP ============
     
@@ -271,17 +278,28 @@ class RAGService(IRAGService):
         stored_name: str
     ) -> None:
         """Background processing pipeline with page image saving and metadata persistence."""
+        document: Optional[ProcessedDocument] = None
+        
         async with get_session() as session:
             doc_repo = SQLDocumentRepository(session)
-            document = None
+            
             try:
-                # 1) Create doc record (your existing logic)
+                # 1) Check duplicate
+                existing = await doc_repo.get_by_hash(file_hash)
+                if existing:
+                    raise DocumentProcessingError(
+                        "Document already exists",
+                        ErrorCode.DUPLICATE_FILE
+                    )
+                
+                # 2) Create doc record
                 document = await doc_repo.create(doc_id, filename, file_hash, stored_name)
 
-                # 2) Convert PDF → images (your existing helper)
-                images: List[Image.Image] = await self._load_images(file_path, file_type)
+                # 3) Convert PDF → images
+                processor = self.doc_processor_factory.get_processor(file_type)
+                images: List[Image.Image] = await processor.load_images(file_path, file_type)
 
-                # 3) Save page images (+ thumbnails)
+                # 4) Save page images (+ thumbnails)
                 page_image_paths, page_thumbnail_paths = {}, {}
                 for page_num, image in enumerate(images, 1):
                     original_rel, thumb_rel = await self.file_storage.save_page_image(
@@ -290,32 +308,49 @@ class RAGService(IRAGService):
                     page_image_paths[page_num] = original_rel
                     page_thumbnail_paths[page_num] = thumb_rel
 
-                # 4) Persist metadata
+                # 5) Persist metadata
                 document.metadata = (document.metadata or {})
                 document.metadata["page_image_paths"] = page_image_paths
                 document.metadata["page_thumbnail_paths"] = page_thumbnail_paths
                 await doc_repo.update_metadata(document.id, document.metadata)
 
-                # 5) OCR → chunking (your existing)
+                # 6) OCR → chunking
                 chunks = await self._extract_text_chunks(file_path, file_type, document, doc_id)
 
-                # Attach image paths to each chunk (used later for page aggregation)
+                # Attach image paths to each chunk
                 for ch in chunks:
                     p = int(ch.metadata.get("page", 0))
                     ch.metadata["image_path"] = page_image_paths.get(p, "")
                     ch.metadata["thumbnail_path"] = page_thumbnail_paths.get(p, "")
 
-                # 6) Embeddings + store (your existing)
+                # 7) Embeddings + store
                 chunks = await self._generate_embeddings(chunks, doc_id)
                 await self._store_chunks(chunks, doc_id)
 
-                logger.info(f"[PROCESS] Completed document: {filename}")
-
-            except Exception as e:
-                logger.exception(f"[PROCESS] Failed for {filename}: {e}")
+                # ✅ Mark as complete
+                progress_store.complete(doc_id)
+                logger.info(f"[PROCESS] Successfully processed {filename}")
+            
+            except DocumentProcessingError as e:
+                logger.error(f"[PROCESS] Processing failed for '{filename}': {e.message}")
+                progress_store.fail(doc_id, e.message, e.error_code)
                 await self._cleanup_on_failure(
                     document.id if document else None,
-                    stored_name,
+                    stored_name, 
+                    doc_id,
+                    doc_repo
+                )
+            
+            except Exception as e:
+                logger.exception(f"[PROCESS] Unexpected error processing '{filename}'")
+                progress_store.fail(
+                    doc_id, 
+                    f"System error: {str(e)[:100]}",
+                    ErrorCode.PROCESSING_FAILED
+                )
+                await self._cleanup_on_failure(
+                    document.id if document else None,
+                    stored_name, 
                     doc_id,
                     doc_repo
                 )
@@ -462,31 +497,38 @@ class RAGService(IRAGService):
  
 
     async def delete_document(self, document_id: str) -> bool:
-        """Delete a document and its chunks"""
         try:
-            document = await self.document_repo.get_by_id(document_id)
-            if not document:
+            doc = await self.document_repo.get_by_id(document_id)
+            if not doc:
                 return False
-            
-            stored_filename = document.metadata.get("stored_filename")
-            
+
+            # Remove original file (if present in metadata)
+            stored_filename = doc.metadata.get("stored_filename") if doc.metadata else None
             if stored_filename:
                 try:
                     await self.file_storage.delete(stored_filename)
                 except Exception as e:
                     logger.warning(f"File deletion failed: {e}")
-            
+
+            # Remove vectors (best-effort)
             try:
                 await self.vector_store.delete_by_document(document_id)
             except Exception as e:
                 logger.warning(f"Vector deletion failed: {e}")
-            
+
+            # Remove page images dir for this doc
+            page_dir = Path(settings.UPLOADS_DIR) / "page_images" / document_id
+            try:
+                await asyncio.to_thread(shutil.rmtree, page_dir, ignore_errors=True)
+            except Exception as e:
+                logger.warning(f"Page image folder deletion failed: {e}")
+
+            # Finally DB record
             return await self.document_repo.delete(document_id)
-            
         except Exception as e:
             logger.error(f"Document deletion failed: {e}")
             return False
-            
+                
     async def list_documents(self, request: Request) -> List[DocumentsListItem]:
         """List all documents with download URLs"""
         documents = await self.document_repo.list_all()
@@ -500,41 +542,51 @@ class RAGService(IRAGService):
             for doc in documents
         ]
         
-    async def get_document_with_path(
-        self, document_id: str
-    ) -> Optional[Dict[str, Any]]:
-        """Get document details and physical file path"""
-        document = await self.document_repo.get_by_id(document_id)
-        if not document:
+    async def get_document_with_path(self, document_id: str):
+        """
+        Return original filename + RELATIVE stored filename.
+        Endpoint will resolve safely.
+        """
+        doc = await self.document_repo.get_by_id(document_id)
+        if not doc:
             return None
-        
-        stored_filename = document.metadata.get("stored_filename")
+
+        stored_filename = (doc.metadata or {}).get("stored_filename")
         if not stored_filename:
             return None
-            
-        file_path = await self.file_storage.get_path(stored_filename)
+
         return {
-            "original_filename": document.filename,
-            "path": file_path
-        } if file_path else None
+            "original_filename": doc.filename,
+            "path": stored_filename,  # relative
+        }
     
+
     async def clear_all(self) -> bool:
-        """Clear all documents, vectors, and chat history"""
+        """Clear all documents, vectors, chat history, and page images."""
         try:
-            documents = await self.document_repo.list_all()
-            
-            # Delete physical files
-            for doc in documents:
-                stored_filename = doc.metadata.get("stored_filename")
+            docs = await self.document_repo.list_all()
+
+            # Delete originals (best-effort)
+            for d in docs:
+                stored_filename = d.metadata.get("stored_filename") if d.metadata else None
                 if stored_filename:
-                    await self.file_storage.delete(stored_filename)
-            
-            # Clear vector store, database, and chat history
-            return (
-                await self.vector_store.clear() and 
-                await self.document_repo.delete_all() and
-                await self.message_repo.clear_history()  # ADD THIS LINE
-            )
+                    try:
+                        await self.file_storage.delete(stored_filename)
+                    except Exception as e:
+                        logger.warning(f"Delete original failed: {e}")
+
+            # Remove entire page_images tree
+            base = Path(settings.UPLOADS_DIR) / "page_images"
+            try:
+                await asyncio.to_thread(shutil.rmtree, base, ignore_errors=True)
+            except Exception as e:
+                logger.warning(f"Failed to remove page_images dir: {e}")
+
+            # Clear vectors, DB, and chat history
+            ok = await self.vector_store.clear()
+            ok = ok and await self.document_repo.delete_all()
+            ok = ok and await self.message_repo.clear_history()
+            return ok
         except Exception as e:
             logger.error(f"Clear all failed: {e}")
             return False
@@ -588,19 +640,6 @@ class RAGService(IRAGService):
                 return []
 
             page_results = await self._aggregate_chunks_to_pages(query, chunk_results, top_k)
-
-            # Soft-fail analytics
-            try:
-                from services.analytics import analytics_tracker
-                analytics_tracker.log_search_event(
-                    query=query,
-                    candidates_count=len(chunk_results) * 3,
-                    filtered_count=len(chunk_results),
-                    reranked_count=len(chunk_results),
-                    pages_returned=len(page_results),
-                )
-            except Exception as e:
-                logger.warning(f"[ANALYTICS] Failed: {e}")
 
             return page_results
 

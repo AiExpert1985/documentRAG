@@ -165,52 +165,37 @@ async def get_page_image(
     size: Literal["original", "thumbnail"] = "original",
     rag_service: IRAGService = Depends(get_rag_service),
 ):
-    """
-    Serve original PNG or thumbnail WebP page image.
-    """
     if not validate_document_id(document_id):
         raise HTTPException(status_code=422, detail="Invalid document ID format")
 
+    # Confirm doc exists (same behavior as before)
     doc = await rag_service.document_repo.get_by_id(document_id)
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found")
 
-    if size == "thumbnail":
-        paths = doc.metadata.get("page_thumbnail_paths", {})
-        media_type = "image/webp"
-    else:
-        paths = doc.metadata.get("page_image_paths", {})
-        media_type = "image/png"
-
-    if page_number not in paths:
-        raise HTTPException(status_code=404, detail=f"Page {page_number} not found")
-
-    rel = paths[page_number]
+    suffix = "_thumb.webp" if size == "thumbnail" else ".png"
+    rel = f"page_images/{document_id}/page_{page_number:03d}{suffix}"
     full = _safe_file_path(settings.UPLOADS_DIR, rel)
+
     if not full.exists():
         raise HTTPException(status_code=404, detail="Image file not found")
 
+    media_type = "image/webp" if size == "thumbnail" else "image/png"
     return FileResponse(
         path=str(full),
         media_type=media_type,
-        filename=f"page_{page_number}.{'webp' if size == 'thumbnail' else 'png'}",
-        headers={
-            "Cache-Control": "public, max-age=31536000, immutable",
-            "ETag": f'"{document_id}-{page_number}-{size}"',
-        },
+        filename=Path(rel).name,
+        headers={"Cache-Control": "public, max-age=31536000, immutable"},
     )
-
 
 # ---------- Download original document (uses safe path) ----------
 @router.get("/download/{document_id}")
 async def download_document(
     document_id: str, rag_service: IRAGService = Depends(get_rag_service)
 ):
-    """Download the original document file."""
     if not validate_document_id(document_id):
         raise HTTPException(status_code=422, detail="Invalid document ID format")
 
-    # Use service helper to get path + original filename
     doc_details = await rag_service.get_document_with_path(document_id)
     if not doc_details:
         raise HTTPException(status_code=404, detail="Document not found")
