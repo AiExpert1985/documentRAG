@@ -2,7 +2,7 @@
 """Database repository implementations"""
 import json
 import logging
-from typing import List, Optional, Dict
+from typing import List, Optional, Dict, Any
 from sqlalchemy import select, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -57,6 +57,15 @@ class SQLDocumentRepository(IDocumentRepository):
             select(DocumentEntity).where(DocumentEntity.file_hash == file_hash)
         )
         return self._to_domain(result.scalar_one_or_none())
+    
+    async def update_metadata(self, document_id: str, metadata: Dict[str, Any]) -> bool:
+        """Persist metadata on the ORM entity and commit."""
+        db_doc = await self.session.get(DocumentEntity, document_id)  # ✅ Get ORM entity
+        if not db_doc:
+            return False
+        db_doc.metadata = metadata or {}  # ✅ Modify ORM entity
+        await self.session.commit()
+        return True
 
     async def list_all(self) -> List[ProcessedDocument]:
         """List all documents"""

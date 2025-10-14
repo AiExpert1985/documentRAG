@@ -67,3 +67,17 @@ class ChunkSearchResult:
     chunk: DocumentChunk
     score: float
     highlights: Optional[List[str]] = None
+
+
+@dataclass
+class PageSearchResult:
+    """Page-level search result with highlights and images."""
+    document_id: str
+    document_name: str
+    page_number: int
+    score: float
+    chunk_count: int
+    image_url: str               # relative path: /page-image/<doc>/<page>
+    thumbnail_url: str           # relative path: /page-image/<doc>/<page>?size=thumbnail
+    highlights: List[str]
+    download_url: Optional[str] = None  # relative path: /download/<doc>

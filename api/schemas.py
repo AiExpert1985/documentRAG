@@ -73,3 +73,22 @@ class ProcessingProgress(BaseModel):
     current_step: str
     error: Optional[str] = None
     error_code: Optional[ErrorCode] = None
+
+
+class PageSearchResultItem(BaseModel):
+    document_id: str
+    document_name: str
+    page_number: int
+    score: float
+    chunk_count: int
+    image_url: str              # ✅ Can be empty string
+    thumbnail_url: str           # ✅ Can be empty string
+    highlights: List[str]
+    download_url: str            # ✅ Can be empty string
+
+
+class PageSearchResponse(BaseModel):
+    status: str
+    query: str
+    results: List[PageSearchResultItem]
+    total_results: int

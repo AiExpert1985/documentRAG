@@ -1,4 +1,5 @@
 # services/rag_service.py
+from collections import defaultdict
 import logging
 from typing import List, Dict, Any, Optional, Tuple
 from pathlib import Path
@@ -11,7 +12,7 @@ from api.schemas import (
     ProcessDocumentResponse, ErrorCode, ProcessingStatus, 
     DocumentProcessingError, DocumentsListItem
 )
-from core.domain import DocumentResponseStatus
+from core.domain import DocumentResponseStatus, PageSearchResult
 from core.interfaces import (
     IDocumentProcessor, IRAGService, IReranker, IVectorStore, IEmbeddingService, 
     IDocumentRepository, IMessageRepository, IFileStorage, DocumentChunk
@@ -261,75 +262,63 @@ class RAGService(IRAGService):
     # ============ BACKGROUND PROCESSING ============
     
     async def _process_document_background(
-        self, doc_id: str, file_path: str, file_type: str, 
-        file_hash: str, filename: str, stored_name: str
+        self,
+        doc_id: str,
+        file_path: str,
+        file_type: str,
+        file_hash: str,
+        filename: str,
+        stored_name: str
     ) -> None:
-        """
-        Complete document processing pipeline in background (independent DB session).
-        
-        Pipeline: duplicate check → OCR → embeddings → storage.
-        Updates progress_store throughout. Auto-cleanup on failure. Never raises (logs errors).
-        """
-        document: Optional[ProcessedDocument] = None
-        
+        """Background processing pipeline with page image saving and metadata persistence."""
         async with get_session() as session:
             doc_repo = SQLDocumentRepository(session)
-            
+            document = None
             try:
-                # Check duplicate
-                existing = await doc_repo.get_by_hash(file_hash)
-                if existing:
-                    raise DocumentProcessingError(
-                        "Document already exists",
-                        ErrorCode.DUPLICATE_FILE
-                    )
-                
-                # Create document
-                document = await doc_repo.create(
-                    doc_id, filename, file_hash, stored_name
-                )
-                
-                # 🔹 Step 1: Extract text (30-95%)
-                chunks : List[DocumentChunk] = await self._extract_text_chunks(
-                    file_path, file_type, document, doc_id
-                )
+                # 1) Create doc record (your existing logic)
+                document = await doc_repo.create(doc_id, filename, file_hash, stored_name)
 
-                for i, chunk in enumerate(chunks):
-                    print(f"{i}: {chunk.content}")
-                
-                # 🔹 Step 2: Generate embeddings (95%)
+                # 2) Convert PDF → images (your existing helper)
+                images: List[Image.Image] = await self._load_images(file_path, file_type)
+
+                # 3) Save page images (+ thumbnails)
+                page_image_paths, page_thumbnail_paths = {}, {}
+                for page_num, image in enumerate(images, 1):
+                    original_rel, thumb_rel = await self.file_storage.save_page_image(
+                        image=image, document_id=doc_id, page_number=page_num
+                    )
+                    page_image_paths[page_num] = original_rel
+                    page_thumbnail_paths[page_num] = thumb_rel
+
+                # 4) Persist metadata
+                document.metadata = (document.metadata or {})
+                document.metadata["page_image_paths"] = page_image_paths
+                document.metadata["page_thumbnail_paths"] = page_thumbnail_paths
+                await doc_repo.update_metadata(document.id, document.metadata)
+
+                # 5) OCR → chunking (your existing)
+                chunks = await self._extract_text_chunks(file_path, file_type, document, doc_id)
+
+                # Attach image paths to each chunk (used later for page aggregation)
+                for ch in chunks:
+                    p = int(ch.metadata.get("page", 0))
+                    ch.metadata["image_path"] = page_image_paths.get(p, "")
+                    ch.metadata["thumbnail_path"] = page_thumbnail_paths.get(p, "")
+
+                # 6) Embeddings + store (your existing)
                 chunks = await self._generate_embeddings(chunks, doc_id)
-                
-                # 🔹 Step 3: Store in vector DB
                 await self._store_chunks(chunks, doc_id)
-                
-                progress_store.complete(doc_id)
-                logger.info(f"Successfully processed {filename}")
-            
-            except DocumentProcessingError as e:
-                logger.error(f"Processing failed for '{filename}': {e.message}")
-                progress_store.fail(doc_id, e.message, e.error_code)
-                await self._cleanup_on_failure(
-                    document.id if document else None,
-                    stored_name, 
-                    doc_id,
-                    doc_repo
-                )
-            
+
+                logger.info(f"[PROCESS] Completed document: {filename}")
+
             except Exception as e:
-                logger.exception(f"Unexpected error processing '{filename}'")
-                progress_store.fail(
-                    doc_id, 
-                    f"System error: {str(e)[:100]}",
-                    ErrorCode.PROCESSING_FAILED
-                )
+                logger.exception(f"[PROCESS] Failed for {filename}: {e}")
                 await self._cleanup_on_failure(
                     document.id if document else None,
-                    stored_name, 
+                    stored_name,
                     doc_id,
                     doc_repo
                 )
-        
 
 
     
@@ -397,7 +386,7 @@ class RAGService(IRAGService):
 
     # ============ SEARCH & MANAGEMENT ============
 
-    async def search(self, query: str, top_k: int = 5) -> List[ChunkSearchResult]:
+    async def search_chunks(self, query: str, top_k: int = 5) -> List[ChunkSearchResult]:
         """
         Hybrid search: Dense → Lexical → Rerank.
         
@@ -586,3 +575,151 @@ class RAGService(IRAGService):
                 f.write("\n\n" + "=" * 80 + "\n\n")
         
         logger.info(f"Debug: Saved {len(chunks)} chunks to {debug_file}")
+
+        
+
+    async def search_pages(self, query: str, top_k: int = 5) -> List[PageSearchResult]:
+        """Search and return page-level results with images (UI-ready)."""
+        try:
+            # Overfetch chunks, then aggregate to pages
+            chunk_results = await self.search_chunks(query, top_k=top_k * 3)
+            if not chunk_results:
+                logger.info(f"[SEARCH-PAGES] No chunks for: {query[:60]}")
+                return []
+
+            page_results = await self._aggregate_chunks_to_pages(query, chunk_results, top_k)
+
+            # Soft-fail analytics
+            try:
+                from services.analytics import analytics_tracker
+                analytics_tracker.log_search_event(
+                    query=query,
+                    candidates_count=len(chunk_results) * 3,
+                    filtered_count=len(chunk_results),
+                    reranked_count=len(chunk_results),
+                    pages_returned=len(page_results),
+                )
+            except Exception as e:
+                logger.warning(f"[ANALYTICS] Failed: {e}")
+
+            return page_results
+
+        except Exception as e:
+            logger.error(f"[SEARCH-PAGES] Failed: {e}", exc_info=True)
+            return []
+
+    async def search(self, query: str, top_k: int = 5) -> List[PageSearchResult]:
+        """Alias: default to page-level results."""
+        return await self.search_pages(query, top_k)
+
+    async def _aggregate_chunks_to_pages(
+        self,
+        query: str,
+        chunk_results: List[ChunkSearchResult],
+        top_k: int
+    ) -> List[PageSearchResult]:
+        """Group chunks by (document_id, page), score with MaxP, build highlights, and attach image URLs."""
+        groups = defaultdict(list)
+        for r in chunk_results:
+            key = (r.chunk.document_id, int(r.chunk.metadata.get("page", 0)))
+            groups[key].append(r)
+
+        pages: List[PageSearchResult] = []
+
+        for (doc_id, page_num), items in groups.items():
+            if not items:
+                continue
+
+            # Scoring: MaxP (primary)
+            max_score = max((it.score for it in items), default=0.0)
+
+            # Highlights (lexical-first, fallback to excerpt)
+            highlights = self._extract_highlights(query, items, max_count=3)
+            if not highlights:
+                best = max(items, key=lambda x: x.score)
+                c = best.chunk.content
+                highlights = [c[:150] + ("..." if len(c) > 150 else "")]
+
+            # Image paths (already attached during processing)
+            image_path = items[0].chunk.metadata.get("image_path", "")
+            thumb_path = items[0].chunk.metadata.get("thumbnail_path", "")
+
+            if image_path:
+                image_url = f"/page-image/{doc_id}/{page_num}"
+                thumbnail_url = f"/page-image/{doc_id}/{page_num}?size=thumbnail"
+            else:
+                image_url = ""
+                thumbnail_url = ""
+
+            doc_name = items[0].chunk.metadata.get("document_name", "Unknown")
+
+            pages.append(PageSearchResult(
+                document_id=doc_id,
+                document_name=doc_name,
+                page_number=page_num,
+                score=max_score,
+                chunk_count=len(items),
+                image_url=image_url,
+                thumbnail_url=thumbnail_url,
+                highlights=highlights,
+                download_url=f"/download/{doc_id}",
+            ))
+
+        pages.sort(key=lambda p: (p.score, p.chunk_count), reverse=True)
+        return pages[:top_k]
+
+
+    def _extract_highlights(
+        self,
+        query: str,
+        items: List[ChunkSearchResult],
+        max_count: int = 3
+    ) -> List[str]:
+        """Keyword-aware highlights with Arabic normalization; fallback handled by caller."""
+        try:
+            from utils.arabic_text import extract_keywords, normalize_arabic
+        except Exception:
+            # if not available, return top chunk excerpt
+            if not items:
+                return []
+            best = max(items, key=lambda x: x.score)
+            return [(best.chunk.content[:150] + "...") if len(best.chunk.content) > 150 else best.chunk.content]
+
+        kws = extract_keywords(query)
+        if not kws:
+            # no keywords → just return top chunk excerpt
+            if not items:
+                return []
+            best = max(items, key=lambda x: x.score)
+            return [(best.chunk.content[:150] + "...") if len(best.chunk.content) > 150 else best.chunk.content]
+
+        out: List[str] = []
+        # take top 3 chunks by score
+        for it in sorted(items, key=lambda x: x.score, reverse=True)[:3]:
+            text = it.chunk.content
+            norm = normalize_arabic(text)
+            hit = None
+            for kw in kws:
+                if kw in norm:
+                    hit = kw
+                    break
+            if hit:
+                words = text.split()
+                # approximate location by scanning normalized tokens
+                for i, w in enumerate(words):
+                    if hit in normalize_arabic(w):
+                        start = max(0, i - 10)
+                        end = min(len(words), i + 11)
+                        snippet = " ".join(words[start:end])
+                        if len(snippet) > 150:
+                            snippet = snippet[:147] + "..."
+                        if start > 0:
+                            snippet = "..." + snippet
+                        if end < len(words):
+                            snippet = snippet + "..."
+                        out.append(snippet)
+                        break
+            if len(out) >= max_count:
+                break
+
+        return out[:max_count]

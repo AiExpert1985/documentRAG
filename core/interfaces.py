@@ -75,6 +75,11 @@ class IDocumentRepository(ABC):
     Does NOT handle: physical files (see IFileStorage) or vectors (see IVectorStore).
     Implementations: SQLDocumentRepository. Swap for MongoDB, DynamoDB, etc.
     """
+
+    @abstractmethod
+    async def update_metadata(self, document_id: str, metadata: Dict[str, Any]) -> bool:
+        """Persist document.metadata JSON/JSONB field."""
+        raise NotImplementedError
     
     @abstractmethod
     async def create(self, document_id: str, filename: str, file_hash: str, stored_filename: str) -> ProcessedDocument:
@@ -219,6 +224,16 @@ class IRAGService(ABC):
     @abstractmethod
     async def get_document_with_path(self, document_id: str) -> Optional[Dict[str, Any]]:
         """Get a document's details and its physical file path."""
+        pass
+
+    @abstractmethod
+    async def search_chunks(self, query: str, top_k: int = 5) -> List[ChunkSearchResult]:
+        """Return chunk-level results (for LLM/compat)."""
+        pass
+
+    @abstractmethod
+    async def search_pages(self, query: str, top_k: int = 5) -> List[PageSearchResult]:
+        """Return page-level results with images (for UI)."""
         pass
 
 # ============= PDF to Image Converter Interface =============
