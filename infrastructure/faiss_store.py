@@ -15,11 +15,22 @@ from config import settings
 logger = logging.getLogger(settings.LOGGER_NAME)
 
 class FAISSVectorStore(IVectorStore):
-    """FAISS implementation with normalized cosine similarity scoring (0-1 scale)"""
+    """
+    FAISS implementation with thread-safe mutations and stable index ordering.
+    
+    Key improvements:
+    - Single asyncio.Lock() prevents race conditions
+    - _row_ids list maintains stable FAISS row → chunk_id mapping
+    - Deletion rebuilds using stable order (no dict key order dependency)
+    - Load/save persists both metadata and row order
+    """
     
     def __init__(self, index_path: str = settings.VECTOR_DB_PATH):
         self._index: Optional[faiss.IndexFlatL2] = None
         self._metadata: Dict[str, Dict[str, Any]] = {}
+        self._row_ids: List[str] = []  # FAISS row → chunk_id (stable order)
+        self._lock = asyncio.Lock()  # Protects all mutations
+        
         self._index_path = Path(index_path) / "faiss.index"
         self._metadata_path = Path(index_path) / "faiss_metadata.json"
         
@@ -27,7 +38,8 @@ class FAISSVectorStore(IVectorStore):
         self._load_index()
 
     def _load_index(self):
-        """Loads index and metadata from disk"""
+        """Loads index, metadata, and row order from disk"""
+        # Load FAISS index
         if self._index_path.exists():
             try:
                 self._index = faiss.read_index(str(self._index_path))
@@ -36,47 +48,75 @@ class FAISSVectorStore(IVectorStore):
                 logger.warning(f"[FAISS] Failed to load index: {e}. Starting fresh.")
                 self._index = None
         
+        # Load metadata + row_ids
         if self._metadata_path.exists():
             try:
                 with open(self._metadata_path, 'r', encoding='utf-8') as f:
-                    self._metadata = json.load(f)
-                logger.info(f"[FAISS] Loaded {len(self._metadata)} metadata records.")
+                    data = json.load(f)
+                    self._metadata = data.get("metadata", {})
+                    self._row_ids = data.get("row_ids", [])
+                logger.info(f"[FAISS] Loaded {len(self._metadata)} chunks with stable ordering.")
             except Exception as e:
                 logger.warning(f"[FAISS] Failed to load metadata: {e}. Starting fresh.")
                 self._metadata = {}
+                self._row_ids = []
 
-    def _save_index(self):
-        """Saves index and metadata to disk"""
+    async def _save_index_locked(self):
+        """
+        Saves index and metadata to disk (must be called under self._lock).
+        Persists both chunk metadata and row order for stable reconstruction.
+        """
+        # Save FAISS index
         if self._index:
-            faiss.write_index(self._index, str(self._index_path))
+            await asyncio.to_thread(faiss.write_index, self._index, str(self._index_path))
         
+        # Save metadata + row_ids together
+        data = {
+            "metadata": self._metadata,
+            "row_ids": self._row_ids
+        }
         with open(self._metadata_path, 'w', encoding='utf-8') as f:
-            json.dump(self._metadata, f, indent=2, ensure_ascii=False)
+            json.dump(data, f, indent=2, ensure_ascii=False)
+        
         logger.info(f"[FAISS] Saved index and metadata.")
 
     async def add_chunks(self, chunks: List[DocumentChunk]) -> bool:
+        """Add chunks with thread-safe mutations"""
         if not chunks:
             return True
 
+        # Prepare data
         embeddings = np.array([c.embedding for c in chunks], dtype='float32')
+        metas = [
+            {
+                "chunk_id": c.id,
+                "content": c.content,
+                "document_id": c.document_id,
+                "metadata": c.metadata or {}
+            }
+            for c in chunks
+        ]
 
+        # Initialize index if needed
         if self._index is None:
             dim = embeddings.shape[1]
             self._index = faiss.IndexFlatL2(dim)
             logger.info(f"[FAISS] Initialized new index with dimension {dim}")
 
         try:
-            await asyncio.to_thread(self._index.add, embeddings) # type: ignore
-
-            for chunk in chunks:
-                self._metadata[chunk.id] = {
-                    "id": chunk.id,
-                    "content": chunk.content,
-                    "document_id": chunk.document_id,
-                    "metadata": chunk.metadata
-                }
+            async with self._lock:
+                # Add to FAISS index
+                await asyncio.to_thread(self._index.add, embeddings) # type: ignore
+                
+                # Update metadata and row order
+                for meta in metas:
+                    chunk_id = meta["chunk_id"]
+                    self._row_ids.append(chunk_id)
+                    self._metadata[chunk_id] = meta
+                
+                # Persist atomically
+                await self._save_index_locked()
             
-            self._save_index()
             return True
         except Exception as e:
             logger.error(f"[FAISS] Failed to add chunks: {e}")
@@ -84,19 +124,8 @@ class FAISSVectorStore(IVectorStore):
 
     async def search(self, query_embedding: List[float], top_k: int = 5) -> List[ChunkSearchResult]:
         """
-        Search with unified cosine similarity scores (0-1 scale).
-        
-        CHANGED: Score calculation now returns normalized similarity:
-        - Old: score = 1/(1+distance) → inconsistent with ChromaDB
-        - New: score = 1 - (distance²/4) → cosine similarity in [0,1]
-        
-        Math explanation (for L2-normalized vectors):
-        - FAISS returns: d² = ||query - chunk||² (squared L2 distance)
-        - Relationship: d² = 2(1 - cos(θ)) where θ is the angle between vectors
-        - Solving for cosine: cos(θ) = 1 - d²/2
-        - Mapping to [0,1]: similarity = (cos(θ) + 1)/2 = 1 - d²/4
-        
-        This makes 0.70 threshold mean the same thing in FAISS and ChromaDB.
+        Search with thread-safe reads using stable row ordering.
+        Returns results with normalized cosine similarity scores [0,1].
         """
         if not self._index:
             logger.warning("[FAISS] Search called but index is empty.")
@@ -106,32 +135,34 @@ class FAISSVectorStore(IVectorStore):
             query_vector = np.array([query_embedding], dtype='float32')
             distances, indices = await asyncio.to_thread(
                 self._index.search, query_vector, top_k
-            )  # type: ignore
+            ) # type: ignore
             
             results = []
-            all_chunk_ids = list(self._metadata.keys())
             
-            for i in range(top_k):
-                index = indices[0][i]
-                if index == -1 or index >= len(all_chunk_ids):
-                    continue
+            async with self._lock:  # Read lock for consistency
+                idxs = indices[0]
+                dists = distances[0]
                 
-                chunk_id = all_chunk_ids[index]
-                metadata = self._metadata.get(chunk_id)
-                
-                if metadata:
-                    # ============= NEW: Unified Similarity Scoring =============
-                    # Convert FAISS L2 distance to cosine similarity [0,1]
-                    l2_distance_squared = distances[0][i]
+                for pos, row in enumerate(idxs):
+                    # Skip invalid indices
+                    if row == -1 or row >= len(self._row_ids):
+                        continue
                     
+                    # Get chunk via stable row → chunk_id mapping
+                    chunk_id = self._row_ids[row]
+                    metadata = self._metadata.get(chunk_id)
+                    
+                    if not metadata:
+                        continue
+                    
+                    # Convert L2 distance (on normalized vectors) to cosine similarity
                     # For unit vectors: d² = 2(1-cos) → cos = 1 - d²/2
-                    # Map cos∈[-1,1] to similarity∈[0,1]: (cos+1)/2 = 1 - d²/4
+                    # Map to [0,1]: similarity = 1 - d²/4
+                    l2_distance_squared = float(dists[pos])
                     similarity = 1.0 - (l2_distance_squared / 4.0)
+                    similarity = max(0.0, min(1.0, similarity))  # Clamp
                     
-                    # Clamp to [0,1] for numerical stability
-                    similarity = max(0.0, min(1.0, similarity))
-                    # ============= END: Unified Similarity Scoring =============
-                    
+                    # Build result
                     chunk = DocumentChunk(
                         id=chunk_id,
                         content=metadata['content'],
@@ -141,69 +172,88 @@ class FAISSVectorStore(IVectorStore):
                     results.append(ChunkSearchResult(chunk=chunk, score=similarity))
             
             return results
+            
         except Exception as e:
             logger.error(f"[FAISS] Search failed: {e}")
             return []
 
     async def delete_by_document(self, document_id: str) -> bool:
-        """Delete all chunks for a document and rebuild index"""
+        """
+        Delete all chunks for a document and rebuild index with stable ordering.
+        Uses _row_ids to ensure correct vector reconstruction.
+        """
         if not self._index or not self._metadata:
             return True
 
         try:
-            vectors_to_keep = []
-            metadata_to_keep = {}
-            all_chunk_ids = list(self._metadata.keys())
-            
-            # Reconstruct vectors we want to keep
-            def reconstruct_keepers():
-                keepers = []
-                for idx, chunk_id in enumerate(all_chunk_ids):
-                    chunk_data = self._metadata[chunk_id]
-                    if chunk_data['document_id'] != document_id:
-                        vector = self._index.reconstruct(idx)  # type: ignore
-                        keepers.append((chunk_id, vector, chunk_data))
-                return keepers
-            
-            keepers = await asyncio.to_thread(reconstruct_keepers)
-            
-            # Rebuild index
-            if keepers:
-                for chunk_id, vector, chunk_data in keepers:
-                    vectors_to_keep.append(vector)
-                    metadata_to_keep[chunk_id] = chunk_data
+            async with self._lock:
+                keep_ids: List[str] = []
+                keep_vecs: List[np.ndarray] = []
+                keep_meta: Dict[str, Dict[str, Any]] = {}
                 
-                embeddings = np.array(vectors_to_keep, dtype='float32')
-                dim = embeddings.shape[1]
-                self._index = faiss.IndexFlatL2(dim)
-                await asyncio.to_thread(self._index.add, embeddings)  # type: ignore
-            else:
-                self._index = None
-            
-            self._metadata = metadata_to_keep
-            self._save_index()
-            
-            logger.info(f"[FAISS] Deleted document {document_id}. "
-                       f"Remaining chunks: {len(metadata_to_keep)}")
-            return True
-            
+                # Iterate using stable row order
+                for row, chunk_id in enumerate(self._row_ids):
+                    meta = self._metadata.get(chunk_id)
+                    if not meta:
+                        continue
+                    
+                    # Keep chunks from other documents
+                    if meta.get('document_id') != document_id:
+                        keep_ids.append(chunk_id)
+                        keep_meta[chunk_id] = meta
+                        # Reconstruct vector using row index
+                        vec = self._index.reconstruct(row) # type: ignore
+                        keep_vecs.append(vec)
+                
+                # Rebuild index
+                dim = self._index.d
+                new_index = faiss.IndexFlatL2(dim)
+                
+                if keep_vecs:
+                    embeddings = np.vstack(keep_vecs).astype('float32', copy=False)
+                    await asyncio.to_thread(new_index.add, embeddings)  # type: ignore
+                
+                # Update state
+                self._index = new_index
+                self._row_ids = keep_ids
+                self._metadata = keep_meta
+                
+                # Persist
+                await self._save_index_locked()
+                
+                logger.info(f"[FAISS] Deleted document {document_id}. "
+                           f"Remaining chunks: {len(keep_meta)}")
+                return True
+                
         except Exception as e:
             logger.error(f"[FAISS] Deletion failed: {e}")
             return False
 
     async def clear(self) -> bool:
-        self._index = None
-        self._metadata = {}
-        
+        """Clear all vectors, metadata, and row order"""
         try:
-            if self._index_path.exists():
-                await asyncio.to_thread(self._index_path.unlink)
-            if self._metadata_path.exists():
-                await asyncio.to_thread(self._metadata_path.unlink)
-            return True
+            async with self._lock:
+                # Reset to empty index
+                if self._index:
+                    dim = self._index.d
+                    self._index = faiss.IndexFlatL2(dim)
+                else:
+                    self._index = None
+                
+                self._metadata.clear()
+                self._row_ids.clear()
+                
+                # Remove files
+                if self._index_path.exists():
+                    await asyncio.to_thread(self._index_path.unlink)
+                if self._metadata_path.exists():
+                    await asyncio.to_thread(self._metadata_path.unlink)
+                
+                return True
         except Exception as e:
             logger.error(f"[FAISS] Clear failed: {e}")
             return False
 
     async def count(self) -> int:
+        """Get total number of chunks"""
         return self._index.ntotal if self._index else 0
