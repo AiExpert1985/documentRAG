@@ -49,13 +49,13 @@ class RAGService(IRAGService):
         message_repo: IMessageRepository,
         reranker: Optional[IReranker] = None
     ):
+        self.vector_store = vector_store  # ✅ Must assign
+        self.reranker = reranker          # ✅ Must assign
         self.document_repo = document_repo
         self.message_repo = message_repo
-        self.vector_store = vector_store
         self.doc_processor_factory = doc_processor_factory
         self.embedding_service = embedding_service
         self.file_storage = file_storage
-        self.reranker = reranker  # NEW
 
     # ============ VALIDATION & PREPARATION ============
     

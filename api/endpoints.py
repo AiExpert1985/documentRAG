@@ -287,3 +287,43 @@ async def get_processing_status(document_id: str) -> ProcessingProgress:
         raise HTTPException(status_code=404, detail="No processing status found for this document")
 
     return ProcessingProgress(document_id=document_id, **progress)
+
+
+# ---------- Health Check ----------
+@router.get("/health")
+async def health_check(rag_service: IRAGService = Depends(get_rag_service)):
+    """
+    System health check endpoint.
+    
+    Returns:
+        - status: healthy/unhealthy
+        - chunks_indexed: Number of chunks in vector store
+        - reranker_loaded: Whether reranker model is available
+        - ocr_engine: Currently configured OCR backend
+        - timestamp: When check was performed
+    """
+    try:
+        from datetime import datetime
+        
+        # Check vector store
+        count = await rag_service.vector_store.count()
+        
+        # Check reranker availability
+        reranker_loaded = False
+        if rag_service.reranker:
+            reranker_loaded = bool(getattr(rag_service.reranker, "_model", None))
+        
+        return {
+            "status": "healthy",
+            "timestamp": datetime.utcnow().isoformat() + "Z",
+            "chunks_indexed": count,
+            "reranker_loaded": reranker_loaded,
+            "ocr_engine": settings.OCR_ENGINE,
+            "vector_store": settings.VECTOR_STORE_TYPE,
+        }
+    except Exception as e:
+        return {
+            "status": "unhealthy",
+            "timestamp": datetime.utcnow().isoformat() + "Z",
+            "error": str(e)
+        }

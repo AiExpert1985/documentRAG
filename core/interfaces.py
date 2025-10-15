@@ -211,6 +211,7 @@ class IRAGService(ABC):
 
     document_repo: IDocumentRepository
     vector_store: IVectorStore
+    reranker: Optional['IReranker']  # ✅ String delays type checking
     
 
     @abstractmethod
