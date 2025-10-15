@@ -5,10 +5,14 @@ Image processing utilities for thumbnails and optimization.
 import asyncio
 import logging
 from pathlib import Path
-from typing import Tuple
 
 from PIL import Image
 
+from config import settings
+
+from typing import List, Tuple, Optional
+from PIL import Image, ImageDraw
+import io, time
 from config import settings
 
 logger = logging.getLogger(getattr(settings, "LOGGER_NAME", __name__))
@@ -100,3 +104,47 @@ class ImageProcessor:
             return thumb
 
         return await asyncio.to_thread(resize)
+    
+
+BBox = Tuple[float,float,float,float]  # normalized [x,y,w,h]
+
+class ImageHighlighter:
+    @staticmethod
+    def _merge_overlaps(bxs: List[BBox], thr: float = 0.10) -> List[BBox]:
+        merged: List[BBox] = []
+        def iou(a,b):
+            ax,ay,aw,ah=a; bx,by,bw,bh=b
+            ax2,ay2, bx2,by2 = ax+aw,ay+ah, bx+bw,by+bh
+            ix1,iy1=max(ax,bx),max(ay,by); ix2,iy2=min(ax2,bx2),min(ay2,by2)
+            if ix2<=ix1 or iy2<=iy1: return 0.0
+            inter=(ix2-ix1)*(iy2-iy1); area=aw*ah + bw*bh - inter
+            return inter/area if area>0 else 0.0
+        for b in bxs:
+            hit=False
+            for i,m in enumerate(merged):
+                if iou(b,m)>=thr:
+                    ax,ay,aw,ah=b; bx,by,bw,bh=m
+                    x1,y1=min(ax,bx),min(ay,by); x2=max(ax+aw,bx+bw); y2=max(ay+ah,by+bh)
+                    merged[i]=(x1,y1,x2-x1,y2-y1); hit=True; break
+            if not hit: merged.append(b)
+        return merged
+
+    @staticmethod
+    def draw_highlights(image_path: str, normalized_bboxes: List[BBox],
+                        style_id: Optional[str]=None, max_regions: Optional[int]=None,
+                        timeout_sec: Optional[int]=None, fmt: str="WEBP") -> bytes:
+        fill_rgb=(255,235,59); outline_rgb=(255,193,7); fill_a=80; outline_a=160; width=3
+        t0=time.time()
+        img=Image.open(image_path).convert("RGBA"); W,H=img.size
+        boxes = normalized_bboxes[: (max_regions or settings.HIGHLIGHT_MAX_REGIONS)]
+        boxes = ImageHighlighter._merge_overlaps(boxes, 0.10)
+        overlay=Image.new("RGBA", img.size, (0,0,0,0)); draw=ImageDraw.Draw(overlay, "RGBA")
+        for x,y,w,h in boxes:
+            if timeout_sec and (time.time()-t0)>timeout_sec: break
+            px,py,pw,ph=int(x*W),int(y*H),max(1,int(w*W)),max(1,int(h*H))
+            draw.rectangle([(px,py),(px+pw,py+ph)],
+                           fill=(*fill_rgb,fill_a), outline=(*outline_rgb,outline_a), width=width)
+        out=Image.alpha_composite(img, overlay).convert("RGB")
+        buf=io.BytesIO()
+        out.save(buf, "PNG" if fmt.upper()=="PNG" else "WEBP", **({"quality":90,"method":6} if fmt.upper()!="PNG" else {"optimize":True}))
+        return buf.getvalue()

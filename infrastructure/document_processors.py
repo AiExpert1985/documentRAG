@@ -19,7 +19,9 @@ import io
 import logging
 import uuid
 from abc import abstractmethod
-from typing import Any, Callable, List, Optional, Tuple
+import re
+from typing import Callable, List, Dict, Any, Optional, Tuple
+from difflib import SequenceMatcher
 
 from PIL import Image
 
@@ -115,6 +117,28 @@ def _is_atomic(doc: LangchainDocument) -> bool:
     kind = (doc.metadata or {}).get("segment_kind", "paragraph")
     return kind in {"item", "header"}
 
+def _normalize_spaces(s: str) -> str:
+    return re.sub(r"\s+", " ", (s or "").strip())
+
+def _text_overlap_ratio(a: str, b: str) -> float:
+    """Cheap, language-agnostic overlap (char-level)."""
+    a = _normalize_spaces(a)
+    b = _normalize_spaces(b)
+    if not a or not b:
+        return 0.0
+    return SequenceMatcher(None, a, b).ratio()
+
+
+def _axis_aligned_from_quad(poly):
+    xs = [p[0] for p in poly]; ys = [p[1] for p in poly]
+    x1, y1, x2, y2 = min(xs), min(ys), max(xs), max(ys)
+    return (int(x1), int(y1), int(x2 - x1), int(y2 - y1))
+
+LineRec = Dict[str, Any]
+SegmentRec = Dict[str, Any]
+BBoxPx  = Tuple[int, int, int, int]
+
+
 # -----------------------------
 # Base Processor
 # -----------------------------
@@ -142,6 +166,21 @@ class BaseOCRProcessor(IDocumentProcessor):
         self.per_page_timeout_s = PER_PAGE_TIMEOUT
 
     @abstractmethod
+    async def _extract_lines(self, image: Image.Image) -> List[LineRec]:
+        """
+        Extract lines with bounding boxes from image.
+        
+        Returns:
+            List of dicts with keys:
+            - line_id: str
+            - poly: List[List[int]] (4-point polygon)
+            - bbox_px: Tuple[int, int, int, int] (x, y, w, h)
+            - text: str
+            - conf: float (0-1)
+        """
+        raise NotImplementedError
+
+    @abstractmethod
     async def _extract_text_from_image(self, image: Image.Image) -> str:
         """Engine-specific page OCR -> plain text with reliable newlines."""
         raise NotImplementedError
@@ -151,38 +190,131 @@ class BaseOCRProcessor(IDocumentProcessor):
         file_path: str,
         file_type: str,
         progress_callback: Optional[Callable[[int, int], None]] = None
-    ) -> List[DocumentChunk]:
-        # 1) Build list of page images
+    ) -> Tuple[List[DocumentChunk], Dict[int, Dict[str, Any]]]:
+        """
+        Process document and return (chunks, geometry_by_page).
+        
+        Returns:
+            Tuple of:
+            - List[DocumentChunk]: Text chunks for embedding/search
+            - Dict[int, Dict]: Geometry data per page for highlighting
+            {
+                page_index: {
+                    "lines": List[LineRec],
+                    "segments": List[SegmentRec]
+                }
+            }
+        """
+        # 1) Load page images
         images = await self.load_images(file_path, file_type)
         total_pages = len(images)
         
-        # 2) Extract text from each page
-        docs: List[LangchainDocument] = []
-        for i, image in enumerate(images):
-            self._update_progress(progress_callback, i + 1, total_pages)
+        all_chunks: List[DocumentChunk] = []
+        geometry_by_page: Dict[int, Dict[str, Any]] = {}
+        
+        # 2) Process each page
+        for page_idx, image in enumerate(images, start=1):
+            self._update_progress(progress_callback, page_idx, total_pages)
             
-            text = await self._extract_page_text(image, i + 1)
-            if not text:
+            try:
+                # Extract lines with bounding boxes
+                lines = await self._extract_lines(image)
+                
+                if not lines:
+                    logger.warning(f"No lines extracted from page {page_idx}")
+                    continue
+                
+                # Segment into paragraphs using arabic_segmenter
+                segments = await self._segment_paragraphs(lines, page_idx)
+                
+                if not segments:
+                    logger.warning(f"No segments created for page {page_idx}")
+                    continue
+                
+                # Convert segments to chunks
+                page_chunks = self._segments_to_chunks(segments, file_path, page_idx)
+                all_chunks.extend(page_chunks)
+                
+                # Store geometry for this page
+                geometry_by_page[page_idx] = {
+                    "lines": lines,
+                    "segments": segments
+                }
+                
+            except Exception as e:
+                logger.error(f"Failed processing page {page_idx}: {e}")
+                # Continue to next page instead of failing entire document
                 continue
-            
-            # Structure-first segmentation
-            segments = self._segment_text(text, file_path, i + 1)
-            docs.extend(segments)
-
-        if not docs:
+        
+        if not all_chunks:
             raise DocumentProcessingError(
                 "No text extracted from document",
                 ErrorCode.NO_TEXT_FOUND
             )
+        
+        logger.info(
+            f"Processed {len(images)} pages into {len(all_chunks)} chunks "
+            f"with geometry for {len(geometry_by_page)} pages"
+        )
+        
+        return all_chunks, geometry_by_page
 
-        # 3) Split, merge, and wrap
+
+    def _segments_to_chunks(
+        self,
+        segments: List[SegmentRec],
+        source: str,
+        page_index: int
+    ) -> List[DocumentChunk]:
+        """
+        Convert segments to DocumentChunks with metadata links.
+        
+        Uses RecursiveCharacterTextSplitter for length-based splitting
+        while preserving segment_id references.
+        """
+        # Build LangchainDocuments from segments
+        docs: List[LangchainDocument] = []
+        for seg in segments:
+            docs.append(
+                LangchainDocument(
+                    page_content=seg["text"],
+                    metadata={
+                        "page": page_index,
+                        "source": source,
+                        "segment_kind": seg.get("type", "paragraph"),
+                        "segment_id": seg["segment_id"]  # Critical for highlighting
+                    }
+                )
+            )
+        
+        # Split long segments
         split_docs = self.text_splitter.split_documents(docs)
+        
+        # Merge tiny paragraphs (respects atomic boundaries)
         merged_docs = self._merge_tiny_paragraphs(split_docs)
         
-        logger.info("Processed %d raw segments into %d chunks", len(docs), len(merged_docs))
-
-        # 4) Build final chunks with optional display wrapping
-        chunks = self._build_chunks(merged_docs)
+        # Build final chunks
+        chunks: List[DocumentChunk] = []
+        for i, doc in enumerate(merged_docs):
+            # Collect segment_ids (chunk may span multiple segments after splitting/merging)
+            segment_ids = []
+            if "segment_id" in doc.metadata:
+                segment_ids.append(doc.metadata["segment_id"])
+            
+            chunks.append(
+                DocumentChunk(
+                    id=f"{uuid.uuid4()}_{i}",
+                    content=doc.page_content,
+                    document_id="",  # Set by service layer
+                    metadata={
+                        "page": doc.metadata.get("page", page_index),
+                        "source": doc.metadata.get("source", source),
+                        "segment_kind": doc.metadata.get("segment_kind", "paragraph"),
+                        "segment_ids": segment_ids,  # For highlight aggregation
+                    }
+                )
+            )
+        
         return chunks
 
     async def load_images(self, file_path: str, file_type: str) -> List[Image.Image]:
@@ -330,12 +462,166 @@ class BaseOCRProcessor(IDocumentProcessor):
                 )
             )
         return chunks
+    
+    async def _segment_paragraphs(self, lines: List[LineRec], page_index: int) -> List[SegmentRec]:
+        """
+        Segment paragraphs using your existing arabic/structure segmenter,
+        then map each segment back to contributing line_ids.
+        """
+        # 1) Rebuild page text in reading order (your OCR pipeline should already sort lines top->bottom)
+        page_text = "\n".join(_normalize_spaces(ln["text"]) for ln in lines if ln.get("text"))
+        if not page_text:
+            return []
+
+        # 2) Call your segmenter
+        # NOTE: import here to avoid import cycles / optional engines
+        from utils.arabic_segmenter import segment_arabic 
+        # segment_arabic should return list of {"text": "...", "kind": "paragraph"/...}
+        segments = segment_arabic(page_text) or []
+
+        # 3) Map segments to line_ids
+        results: List[SegmentRec] = []
+        for seg in segments:
+            seg_text = _normalize_spaces(seg.get("text", ""))
+            if not seg_text:
+                continue
+
+            # Heuristic: collect line_ids whose text has strong overlap with seg_text
+            line_ids: List[str] = []
+            for ln in lines:
+                ln_text = _normalize_spaces(ln.get("text", ""))
+                if not ln_text:
+                    continue
+                # quick substring fast path
+                if ln_text and (ln_text in seg_text or seg_text in ln_text):
+                    line_ids.append(ln["line_id"])
+                    continue
+                # fallback: ratio threshold
+                if _text_overlap_ratio(ln_text, seg_text) >= 0.65:
+                    line_ids.append(ln["line_id"])
+
+            if not line_ids:
+                # fallback: try greedy assignment by proximity (optional)
+                # For MVP we skip this to avoid over-highlighting
+                continue
+
+            results.append({
+                "segment_id": f"seg_{uuid.uuid4().hex[:8]}",
+                "line_ids": line_ids,
+                "text": seg_text,
+                "type": seg.get("kind", "paragraph"),
+                "page_index": page_index
+            })
+
+        # MVP guard: if segmenter returned nothing (e.g., non-Arabic), treat each line as segment
+        if not results and lines:
+            for ln in lines:
+                if not ln.get("text"):
+                    continue
+                results.append({
+                    "segment_id": f"seg_{uuid.uuid4().hex[:8]}",
+                    "line_ids": [ln["line_id"]],
+                    "text": _normalize_spaces(ln["text"]),
+                    "type": "line",
+                    "page_index": page_index
+                })
+
+        return results
 
 # -----------------------------
 # Tesseract
 # -----------------------------
 class TesseractProcessor(BaseOCRProcessor):
-    """Tesseract OCR engine (ara+eng)."""
+    """
+    Tesseract-backed OCR that returns line-level geometry.
+    Uses pytesseract.image_to_data to capture bboxes.
+    """
+
+    def __init__(self, lang: str = "ara+eng", *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._lang = lang
+
+    async def _extract_lines(self, image: Image.Image) -> List[LineRec]:
+        """
+        Extract lines with geometry from a PIL image using Tesseract.
+        Returns a unified list of dicts:
+          {
+            "line_id": "ln_xxx",
+            "poly": [[x1,y1],[x2,y1],[x2,y2],[x1,y2]],   # pixel-space quad
+            "bbox_px": (x, y, w, h),                     # pixel-space AABB
+            "text": "line text",
+            "conf": 0.0..1.0                             # min word conf in the line
+          }
+        """
+        from pytesseract import image_to_data, Output  # local import to avoid hard dep if not enabled
+
+        # Make sure we pass RGB
+        rgb = image.convert("RGB")
+
+        data = image_to_data(rgb, lang=self._lang, output_type=Output.DICT)
+
+        n = len(data["text"])
+        if n == 0:
+            return []
+
+        # Group words into lines by (block_num, line_num)
+        by_line: Dict[Tuple[int, int], List[int]] = {}
+        for i in range(n):
+            # Tesseract uses "-1" for non-words/metadata; skip those
+            try:
+                conf_i = float(data["conf"][i])
+            except Exception:
+                conf_i = -1.0
+            if conf_i < 0:
+                continue
+
+            blk = int(data.get("block_num", [0])[i] or 0)
+            ln  = int(data.get("line_num",  [0])[i] or 0)
+            by_line.setdefault((blk, ln), []).append(i)
+
+        lines: List[LineRec] = []
+
+        for (blk, ln), idxs in by_line.items():
+            xs: List[int] = []
+            ys: List[int] = []
+            x2s: List[int] = []
+            y2s: List[int] = []
+            parts: List[str] = []
+            min_conf = 1000.0
+
+            for i in idxs:
+                l = int(data["left"][i]);  t = int(data["top"][i])
+                w = int(data["width"][i]); h = int(data["height"][i])
+
+                xs.append(l); ys.append(t); x2s.append(l + w); y2s.append(t + h)
+
+                txt = (data["text"][i] or "").strip()
+                if txt:
+                    parts.append(txt)
+
+                try:
+                    c = float(data["conf"][i])
+                    if c < min_conf:
+                        min_conf = c
+                except Exception:
+                    # ignore malformed conf entries
+                    pass
+
+            if not xs or not parts:
+                continue
+
+            x1, y1, x2, y2 = min(xs), min(ys), max(x2s), max(y2s)
+            bbox_px: BBoxPx = (x1, y1, x2 - x1, y2 - y1)
+
+            lines.append({
+                "line_id": f"ln_{uuid.uuid4().hex[:8]}",
+                "poly": [[x1, y1], [x2, y1], [x2, y2], [x1, y2]],
+                "bbox_px": bbox_px,
+                "text": " ".join(parts),
+                "conf": 0.0 if min_conf == 1000.0 else max(0.0, min(1.0, min_conf / 100.0)),
+            })
+
+        return lines
     
     async def _extract_text_from_image(self, image: Image.Image) -> str:
         logger.info("Using TesseractProcessor")
@@ -359,22 +645,47 @@ class EasyOCRProcessor(BaseOCRProcessor):
     
     reader: Optional[Any] = None
 
-    async def _init_reader(self) -> None:
-        if EasyOCRProcessor.reader is None:
-            try:
-                import easyocr  # type: ignore
-            except Exception as e:
-                raise RuntimeError(
-                    "EasyOCR not installed. Run: pip install easyocr"
-                ) from e
-            
-            EasyOCRProcessor.reader = easyocr.Reader(
-                getattr(settings, "OCR_LANGUAGES", ["ar", "en"])
-            )
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.reader = None
+
+    async def _get_reader(self):
+        if self.reader is not None:
+            return
+        try:
+            import easyocr  # type: ignore
+        except Exception as e:
+            raise RuntimeError(f"EasyOCR not available: {e}")
+        # languages: adjust to your corpus
+        self.reader = easyocr.Reader(['ar', 'en'], gpu=False)
+
+    async def _extract_lines(self, image: Image.Image) -> List[Dict[str, Any]]:
+        await self._get_reader()
+        # easyocr accepts ndarray; convert
+        import numpy as np
+        arr = np.array(image.convert("RGB"))
+        # detail=1 returns list of [bbox, text, conf]
+        reader = self.reader  # Local var
+        assert reader is not None
+        results = reader.readtext(arr, detail=1, paragraph=False)
+        lines: List[Dict[str, Any]] = []
+        for bbox, text, conf in results:
+            # bbox is [[x1,y1],[x2,y2],[x3,y3],[x4,y4]]
+            if not text:
+                continue
+            bbox_px = _axis_aligned_from_quad(bbox)
+            lines.append({
+                "line_id": f"ln_{uuid.uuid4().hex[:8]}",
+                "poly": [[int(x), int(y)] for x, y in bbox],
+                "bbox_px": bbox_px,
+                "text": str(text),
+                "conf": float(conf) if conf is not None else 0.0,
+            })
+        return lines
 
     async def _extract_text_from_image(self, image: Image.Image) -> str:
         logger.info("Using EasyOCRProcessor")
-        await self._init_reader()
+        await self._get_reader()
         
         img_bytes = io.BytesIO()
         image.save(img_bytes, format="PNG")
@@ -409,9 +720,41 @@ class PaddleOCRProcessor(BaseOCRProcessor):
     Handles both dict and list result formats.
     """
     
-    def __init__(self, pdf_converter: Optional[IPdfToImageConverter] = None, **kwargs) -> None:
-        super().__init__(pdf_converter, **kwargs)
-        self._engine = None
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.ocr = None
+
+    async def _ensure_reader(self):
+        if self.ocr is not None:
+            return
+        try:
+            from paddleocr import PaddleOCR  # type: ignore
+        except Exception as e:
+            raise RuntimeError(f"PaddleOCR not available: {e}")
+        # use_angle_cls helps with rotation; adjust langs as needed
+        self.ocr = PaddleOCR(use_angle_cls=True, lang='ar')  # or 'ar', 'en', 'ar+en' depending on support
+
+    async def _extract_lines(self, image: Image.Image) -> List[Dict[str, Any]]:
+        await self._ensure_reader()
+        assert self.ocr is not None  # Add this line
+        import numpy as np
+        arr = np.array(image.convert("RGB"))
+        result = self.ocr.ocr(arr, cls=True)
+        lines: List[Dict[str, Any]] = []
+        # Paddle returns list per image; first element is results
+        for det in (result[0] or []):
+            poly, (text, conf) = det
+            if not text:
+                continue
+            bbox_px = _axis_aligned_from_quad(poly)
+            lines.append({
+                "line_id": f"ln_{uuid.uuid4().hex[:8]}",
+                "poly": [[int(x), int(y)] for x, y in poly],
+                "bbox_px": bbox_px,
+                "text": str(text),
+                "conf": float(conf) if conf is not None else 0.0,
+            })
+        return lines
 
     def _ensure_engine(self) -> None:
         """Initialize PaddleOCR with version/platform checks."""

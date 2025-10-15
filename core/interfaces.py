@@ -47,10 +47,14 @@ class IDocumentProcessor(ABC):
         file_path: str, 
         file_type: str,
         progress_callback: Optional[Callable[[int, int], None]] = None
-    ) -> List[DocumentChunk]:
+    ) -> Tuple[List[DocumentChunk], Dict[int, Dict[str, Any]]]:
         """
         Extract text via OCR and split into chunks.
-        progress_callback(current_page, total_pages) called per page if provided.
+
+        Returns:
+            Tuple:
+              - List[DocumentChunk]
+              - Dict[int, Dict[str, Any]]  # geometry_by_page
         """
         pass
 

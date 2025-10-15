@@ -14,9 +14,21 @@ Before production deployment:
 4. Enable audit logging
 ==================================
 """
+
+from fastapi import APIRouter, HTTPException, Response, Depends
+from sqlalchemy.ext.asyncio import AsyncSession
+from pathlib import Path
+from typing import Dict, Any, List, Tuple
+
+from database.session import get_db
+from infrastructure.repositories import SQLDocumentRepository
+from utils.highlight_token import verify
+from infrastructure.image_utils import ImageHighlighter
+from config import settings
 import os
 from pathlib import Path
 from typing import List, Dict, Literal
+from utils.highlight_token import sign
 
 from fastapi import APIRouter, UploadFile, File, HTTPException, Depends, Request
 from fastapi.responses import FileResponse
@@ -134,8 +146,11 @@ async def search_pages_endpoint(
     pages = await rag_service.search_pages(chat_request.question, top_k=settings.TOP_K)
 
     base_url = str(request.base_url).rstrip("/")
-    results = [
-        PageSearchResultItem(
+    results: List[PageSearchResultItem] = []
+    base_url = str(request.base_url).rstrip("/")
+
+    for p in pages:
+        item = PageSearchResultItem(
             document_id=p.document_id,
             document_name=p.document_name,
             page_number=p.page_number,
@@ -146,8 +161,27 @@ async def search_pages_endpoint(
             highlights=p.highlights,
             download_url=(base_url + p.download_url) if p.download_url else "",
         )
-        for p in pages
-    ]
+
+        # 🔶 NEW: load page segments from document metadata -> build token
+        try:
+            doc = await rag_service.document_repo.get_by_id(p.document_id)
+            meta = (doc.metadata or {}) if doc else {}
+            page_segments = (meta.get("segments") or {}).get(str(p.page_number), [])
+            seg_ids = [s.get("segment_id") for s in page_segments if s.get("segment_id")]
+            if seg_ids:
+                item.segment_ids = seg_ids[: settings.HIGHLIGHT_MAX_REGIONS]
+                item.highlight_token = sign({
+                    "doc_id": p.document_id,
+                    "page_index": p.page_number,
+                    "segment_ids": item.segment_ids,
+                    "style_id": settings.HIGHLIGHT_STYLE_ID,
+                    "source_version": "v1"
+                }, exp_seconds=120)
+        except Exception:
+            # If anything fails here, we just send the basic item (no highlights)
+            pass
+
+        results.append(item)
 
     return PageSearchResponse(
         status="success",
@@ -327,3 +361,111 @@ async def health_check(rag_service: IRAGService = Depends(get_rag_service)):
             "timestamp": datetime.utcnow().isoformat() + "Z",
             "error": str(e)
         }
+    
+
+
+# @router.get("/page-image/highlighted/{token}")
+# async def get_highlighted_image(token: str, db: AsyncSession = Depends(get_session)):
+#     if not settings.ENABLE_HIGHLIGHT_PREVIEW:
+#         raise HTTPException(status_code=404, detail="Disabled")
+
+#     try:
+#         payload = verify(token)
+#     except ValueError:
+#         raise HTTPException(status_code=401, detail="Invalid or expired token")
+
+#     doc_id = payload.get("doc_id"); page_index = int(payload.get("page_index", -1))
+#     seg_ids = payload.get("segment_ids") or []; style_id = payload.get("style_id", settings.HIGHLIGHT_STYLE_ID)
+#     if not doc_id or page_index < 0:
+#         raise HTTPException(status_code=400, detail="Invalid request")
+
+#     repo = SQLDocumentRepository(db)
+#     doc = await repo.get_by_id(doc_id)
+#     if not doc:
+#         raise HTTPException(status_code=404, detail="Document not found")
+
+#     meta: Dict[str, Any] = doc.metadata or {}
+#     rel = (meta.get("page_image_paths") or {}).get(str(page_index))
+#     if not rel:
+#         raise HTTPException(status_code=404, detail="Page image not found")
+
+#     image_path = Path(settings.UPLOADS_DIR)/rel
+#     if not image_path.exists():
+#         raise HTTPException(status_code=404, detail="Page image file missing")
+
+#     page_segments: List[Dict[str, Any]] = (meta.get("segments") or {}).get(str(page_index), [])
+#     if not page_segments:
+#         return Response(content=image_path.read_bytes(), media_type="image/webp",
+#                         headers={"X-Highlight-Status":"missing_boxes"})
+
+#     wanted=set(seg_ids) if seg_ids else set()
+#     bboxes=[]
+#     for seg in page_segments:
+#         if wanted and seg.get("segment_id") not in wanted:
+#             continue
+#         if seg.get("bbox"):
+#             bboxes.append(tuple(float(x) for x in seg["bbox"]))
+
+#     if not bboxes:
+#         return Response(content=image_path.read_bytes(), media_type="image/webp",
+#                         headers={"X-Highlight-Status":"missing_boxes"})
+
+#     try:
+#         img = ImageHighlighter.draw_highlights(
+#             image_path=str(image_path),
+#             normalized_bboxes=bboxes,
+#             style_id=style_id,
+#             max_regions=settings.HIGHLIGHT_MAX_REGIONS,
+#             timeout_sec=settings.HIGHLIGHT_TIMEOUT_SEC,
+#             fmt="WEBP",
+#         )
+#         return Response(content=img, media_type="image/webp", headers={"X-Highlight-Status":"ok"})
+#     except Exception:
+#         return Response(content=image_path.read_bytes(), media_type="image/webp",
+#                         headers={"X-Highlight-Status":"error"})
+
+
+@router.get("/page-image/highlighted/{document_id}/{page_number}")
+async def get_highlighted_image_direct(
+    document_id: str,
+    page_number: int,
+    db: AsyncSession = Depends(get_db),   # ✅ inject an AsyncSession
+):
+    repo = SQLDocumentRepository(db)
+    doc = await repo.get_by_id(document_id)
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+
+    meta = doc.metadata or {}
+    # Paths are stored with string keys
+    page_images = (meta.get("page_image_paths") or {})
+    rel = page_images.get(str(page_number))
+    if not rel:
+        raise HTTPException(status_code=404, detail="Page image not found")
+
+    # Normalized highlight boxes per page (saved by RAGService)
+    segments_by_page = (meta.get("segments") or {})
+    segs = segments_by_page.get(str(page_number), [])  # list of {"bbox": [x,y,w,h], ...}
+
+    # Collect normalized bboxes
+    bboxes = []
+    for seg in segs[: settings.HIGHLIGHT_MAX_REGIONS]:
+        bbox = seg.get("bbox")
+        if isinstance(bbox, (list, tuple)) and len(bbox) == 4:
+            # ensure float tuple
+            x, y, w, h = bbox
+            bboxes.append((float(x), float(y), float(w), float(h)))
+
+    abs_path = Path(settings.UPLOADS_DIR) / rel
+    if not abs_path.exists():
+        raise HTTPException(status_code=404, detail="Image file missing")
+
+    # Draw and return WEBP (fast + small)
+    img_bytes = ImageHighlighter.draw_highlights(
+        str(abs_path),
+        bboxes,
+        max_regions=settings.HIGHLIGHT_MAX_REGIONS,
+        timeout_sec=2,
+        fmt="WEBP",
+    )
+    return Response(content=img_bytes, media_type="image/webp")

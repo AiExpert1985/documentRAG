@@ -81,10 +81,12 @@ class PageSearchResultItem(BaseModel):
     page_number: int
     score: float
     chunk_count: int
-    image_url: str              # ✅ Can be empty string
-    thumbnail_url: str           # ✅ Can be empty string
+    image_url: Optional[str] = None
+    thumbnail_url: Optional[str] = None
     highlights: List[str]
     download_url: str            # ✅ Can be empty string
+    segment_ids: Optional[List[str]] = None
+    highlight_token: Optional[str] = None
 
 
 class PageSearchResponse(BaseModel):

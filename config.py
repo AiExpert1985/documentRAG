@@ -8,7 +8,6 @@ class Settings(BaseSettings):
     """Application configuration"""
     
     # Logger configuration
-    LOGGER_NAME: str = "rag_system_logger"
     LOG_FILE_PATH: str = get_log_file_path()
     
     # Database
@@ -99,6 +98,15 @@ class Settings(BaseSettings):
 
     # Logging
     LOGGER_NAME: str = "alfahras"
+
+    # Highlight preview feature flags / params
+    ENABLE_HIGHLIGHT_PREVIEW: bool = True
+    HIGHLIGHT_STYLE_ID: str = "default"
+    HIGHLIGHT_MAX_REGIONS: int = 10
+    HIGHLIGHT_TIMEOUT_SEC: int = 2
+
+    # Token secret (SET IN .env FOR PROD)
+    HIGHLIGHT_TOKEN_SECRET: str = "CHANGE_ME_IN_PROD"
 
     class Config:
         env_file = ".env"

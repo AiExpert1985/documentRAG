@@ -6,11 +6,16 @@ from pathlib import Path
 from uuid import uuid4
 from PIL import Image
 
+from utils.highlight_token import sign
+
 from fastapi import UploadFile, Request, HTTPException
 from pydantic import HttpUrl
 
+from utils.highlight_token import sign
+from config import settings
+
 from api.schemas import (
-    ProcessDocumentResponse, ErrorCode, ProcessingStatus, 
+    PageSearchResultItem, ProcessDocumentResponse, ErrorCode, ProcessingStatus, 
     DocumentProcessingError, DocumentsListItem
 )
 from core.domain import DocumentResponseStatus, PageSearchResult
@@ -37,6 +42,91 @@ import shutil
 import asyncio
 
 logger = logging.getLogger(__name__)
+
+
+# A) after saving stored page images, normalize/persist segments
+async def _normalize_and_persist_segments(self, document, geometry_by_page: Dict[int, Dict[str,Any]], page_image_paths: Dict[int,str]):
+    segments_meta={}
+    for page_idx, geo in geometry_by_page.items():
+        rel = page_image_paths.get(page_idx)
+        if not rel: continue
+        W,H = Image.open(Path(settings.UPLOADS_DIR)/rel).size
+        lines = {ln["line_id"]: ln for ln in geo.get("lines", [])}
+        page_segments=[]
+        for seg in geo.get("segments", []):
+            bxs=[lines[l]["bbox_px"] for l in seg.get("line_ids",[]) if l in lines]
+            if not bxs: continue
+            x1=min(b[0] for b in bxs); y1=min(b[1] for b in bxs)
+            x2=max(b[0]+b[2] for b in bxs); y2=max(b[1]+b[3] for b in bxs)
+            bbox=[x1/W, y1/H, (x2-x1)/W, (y2-y1)/H]
+            page_segments.append({"segment_id":seg["segment_id"],"page_index":page_idx,"line_ids":seg["line_ids"],"bbox":bbox})
+        segments_meta[str(page_idx)]=page_segments
+    meta=document.metadata or {}
+    meta["segments"]=segments_meta
+    meta["page_image_paths"]={str(k):v for k,v in page_image_paths.items()}
+    document.metadata=meta
+    await self.document_repo.update_metadata(document.id, meta)
+
+# B) aggregate segment ids for a page's chunk hits
+def _collect_segment_ids_for_page(self, chunk_hits_for_page)->List[str]:
+    s=set()
+    for h in chunk_hits_for_page:
+        s.update((h.chunk.metadata or {}).get("segment_ids", []))
+    return list(s)
+
+# C) when building each PageSearchResultItem
+from api.schemas import PageSearchResultItem
+from config import settings
+from utils.highlight_token import sign
+
+def _build_page_result_item(self, page_hit):
+    doc_id = page_hit.document_id
+    page_index = page_hit.page_number
+
+    # Derive required fields your schema enforces
+    document_name = getattr(page_hit, "document_name", None) or getattr(page_hit, "title", None) or doc_id
+    chunk_hits = getattr(page_hit, "chunk_hits", []) or []
+    chunk_count = len(chunk_hits)
+    # Score: take best (max) from chunk hits; fallback 0.0
+    score = max((getattr(h, "score", 0.0) or 0.0) for h in chunk_hits) if chunk_hits else 0.0
+    # Highlights: pick top snippets (truncate defensively)
+    highlights = []
+    for h in chunk_hits[:3]:
+        snip = getattr(h, "snippet", None) or getattr(h, "text", None) or ""
+        highlights.append(snip[:240])
+
+    # Build highlight token (optional)
+    seg_ids = self._collect_segment_ids_for_page(chunk_hits)
+    highlight_token = None
+    if settings.ENABLE_HIGHLIGHT_PREVIEW and seg_ids:
+        highlight_token = sign({
+            "doc_id": doc_id,
+            "page_index": page_index,
+            "segment_ids": seg_ids[: settings.HIGHLIGHT_MAX_REGIONS],
+            "style_id": settings.HIGHLIGHT_STYLE_ID,
+            "source_version": "v1",
+        }, exp_seconds=120)
+
+    # URLs
+    image_url = getattr(page_hit, "image_url", None)
+    thumbnail_url = getattr(page_hit, "thumbnail_url", None)
+    # Provide a stable download URL your API already supports (adjust path to your endpoint)
+    download_url = f"/documents/{doc_id}/download"
+
+    return PageSearchResultItem(
+        document_id=doc_id,
+        document_name=document_name,   # REQUIRED by your schema
+        page_number=page_index,
+        score=score,                   # REQUIRED
+        chunk_count=chunk_count,       # REQUIRED
+        highlights=highlights,         # REQUIRED (list[str])
+        download_url=download_url,     # REQUIRED (str/HttpUrl)
+        image_url=image_url,
+        thumbnail_url=thumbnail_url,
+        segment_ids=seg_ids or None,
+        highlight_token=highlight_token,
+    )
+
 
 class RAGService(IRAGService):
     def __init__(
@@ -116,12 +206,13 @@ class RAGService(IRAGService):
         return file_path
     
     # ============ DOCUMENT PROCESSING ============
+
     async def _extract_text_chunks(
         self, file_path: str, file_type: str, document: ProcessedDocument, doc_id: str
-    ) -> List[DocumentChunk]:
+    ) -> Tuple[List[DocumentChunk], Dict[int, Dict[str, Any]]]:
         """
         Extract text via OCR and split into chunks (without embeddings).
-        Progress: 30-95%. Returns chunks with embedding=None.
+        Progress: 30-95%. Returns (chunks, geometry_by_page).
         """
         def update_page_progress(current_page: int, total_pages: int):
             page_percent = (current_page / total_pages) * 65
@@ -137,7 +228,8 @@ class RAGService(IRAGService):
                             "Starting text extraction...")
         
         processor = self.doc_processor_factory.get_processor(file_type)
-        chunks = await processor.process(file_path, file_type, update_page_progress)
+        # IMPORTANT: processor.process returns (chunks, geometry_by_page)
+        chunks, geometry_by_page = await processor.process(file_path, file_type, update_page_progress)
         
         if not chunks:
             raise DocumentProcessingError(
@@ -152,10 +244,11 @@ class RAGService(IRAGService):
                 "document_name": document.filename
             })
         
-        # 🔍 DEBUG: Save chunks to file for inspection
+        # Debug: write all chunks to a file for inspection
         self._save_chunks_for_debug(chunks, document.filename)
         
-        return chunks
+        return chunks, geometry_by_page
+
 
 
     async def _generate_embeddings(
@@ -316,23 +409,22 @@ class RAGService(IRAGService):
 
                 # 6) OCR → chunking (with fallback)
                 try:
-                    chunks = await self._extract_text_chunks(file_path, file_type, document, doc_id)
+                    chunks, geometry_by_page = await self._extract_text_chunks(file_path, file_type, document, doc_id)
                 except RuntimeError as ocr_error:
-                    # Primary OCR engine failed, try fallback
                     logger.warning(f"[PROCESS] Primary OCR failed: {ocr_error}")
                     logger.info(f"[PROCESS] Attempting OCR fallback for {filename}")
-                    
-                    # This will be caught by _extract_text_chunks if it uses factory
-                    # Or handle here if you want explicit fallback control
-                    chunks = await self._extract_text_chunks_with_fallback(
+                    chunks, geometry_by_page = await self._extract_text_chunks_with_fallback(
                         file_path, file_type, document, doc_id
                     )
 
-                # Attach image paths to each chunk
+                # Attach image paths to each chunk (needs the dicts populated above)
                 for ch in chunks:
                     p = int(ch.metadata.get("page", 0))
                     ch.metadata["image_path"] = page_image_paths.get(p, "")
                     ch.metadata["thumbnail_path"] = page_thumbnail_paths.get(p, "")
+
+                # 🔶 NEW: persist normalized bboxes (segments) into document.metadata
+                await _normalize_and_persist_segments(self, document, geometry_by_page, page_image_paths)
 
                 # 7) Embeddings + store
                 chunks = await self._generate_embeddings(chunks, doc_id)
@@ -830,10 +922,10 @@ class RAGService(IRAGService):
     
     async def _extract_text_chunks_with_fallback(
         self, file_path: str, file_type: str, document: ProcessedDocument, doc_id: str
-    ) -> List[DocumentChunk]:
+    ) -> Tuple[List[DocumentChunk], Dict[int, Dict[str, Any]]]:
         """
         Extract text with automatic OCR engine fallback.
-        Tries primary engine, then fallback if primary fails.
+        Returns (chunks, geometry_by_page).
         """
         def update_page_progress(current_page: int, total_pages: int):
             page_percent = (current_page / total_pages) * 65
@@ -848,14 +940,14 @@ class RAGService(IRAGService):
         # Try primary processor
         try:
             processor = self.doc_processor_factory.get_processor(file_type)
-            chunks = await processor.process(file_path, file_type, update_page_progress)
+            chunks, geometry_by_page = await processor.process(
+                file_path, file_type, update_page_progress
+            )
         except RuntimeError as e:
             logger.warning(f"[OCR] Primary engine failed: {e}, trying fallback...")
-            
-            # Try fallback processor
             try:
                 processor = self.doc_processor_factory.get_fallback_processor(file_type)
-                chunks = await processor.process(file_path, file_type, update_page_progress)
+                chunks, geometry_by_page = await processor.process(file_path, file_type, update_page_progress)
             except RuntimeError as fallback_error:
                 raise DocumentProcessingError(
                     f"All OCR engines failed. Last error: {fallback_error}",
@@ -868,7 +960,6 @@ class RAGService(IRAGService):
                 ErrorCode.NO_TEXT_FOUND
             )
         
-        # Attach metadata
         for chunk in chunks:
             chunk.document_id = document.id
             chunk.metadata.update({
@@ -876,7 +967,5 @@ class RAGService(IRAGService):
                 "document_name": document.filename
             })
         
-        # Debug save
         self._save_chunks_for_debug(chunks, document.filename)
-        
-        return chunks
+        return chunks, geometry_by_page
