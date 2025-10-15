@@ -314,8 +314,19 @@ class RAGService(IRAGService):
                 document.metadata["page_thumbnail_paths"] = page_thumbnail_paths
                 await doc_repo.update_metadata(document.id, document.metadata)
 
-                # 6) OCR → chunking
-                chunks = await self._extract_text_chunks(file_path, file_type, document, doc_id)
+                # 6) OCR → chunking (with fallback)
+                try:
+                    chunks = await self._extract_text_chunks(file_path, file_type, document, doc_id)
+                except RuntimeError as ocr_error:
+                    # Primary OCR engine failed, try fallback
+                    logger.warning(f"[PROCESS] Primary OCR failed: {ocr_error}")
+                    logger.info(f"[PROCESS] Attempting OCR fallback for {filename}")
+                    
+                    # This will be caught by _extract_text_chunks if it uses factory
+                    # Or handle here if you want explicit fallback control
+                    chunks = await self._extract_text_chunks_with_fallback(
+                        file_path, file_type, document, doc_id
+                    )
 
                 # Attach image paths to each chunk
                 for ch in chunks:
@@ -355,7 +366,57 @@ class RAGService(IRAGService):
                     doc_repo
                 )
 
+    # ============ RERANK ============
 
+    def _should_rerank(self, scores: List[float]) -> bool:
+        """
+        Determine if reranking is needed based on score distribution.
+        
+        Skip reranking for:
+        - Very strong matches (>0.75) - already confident
+        - Very weak matches (<0.55) - won't improve much
+        
+        Only rerank borderline cases (0.55-0.75) where neural precision helps.
+        """
+        if not scores:
+            return False
+        
+        top_score = max(scores)
+        return settings.RERANK_GATE_LOW <= top_score <= settings.RERANK_GATE_HIGH
+
+    async def _maybe_rerank(
+        self, 
+        query: str, 
+        candidates: List[ChunkSearchResult]
+    ) -> List[ChunkSearchResult]:
+        """
+        Conditionally rerank results with cross-encoder.
+        
+        Gates reranking by score and caps candidates to prevent latency spikes.
+        Returns reranked top candidates + remaining results in original order.
+        """
+        if not self.reranker:
+            return candidates
+        
+        # Check if reranking is needed
+        scores = [c.score for c in candidates]
+        if not self._should_rerank(scores):
+            logger.info(f"[RERANK] Skipping (top score: {max(scores):.3f})")
+            return candidates
+        
+        # Cap candidates to prevent slow cross-encoder on large sets
+        cap = min(len(candidates), settings.RERANK_CANDIDATE_CAP)
+        capped = candidates[:cap]
+        
+        # Rerank top candidates
+        reranked = await self.reranker.rerank(query, capped, top_k=cap)
+        
+        # Preserve non-reranked results
+        capped_ids = {c.chunk.id for c in capped}
+        rest = [c for c in candidates if c.chunk.id not in capped_ids]
+        
+        logger.info(f"[RERANK] Reranked {len(capped)} candidates")
+        return reranked + rest
     
     # ============ MAIN PROCESSING METHOD ============
     
@@ -465,12 +526,13 @@ class RAGService(IRAGService):
                 if candidates_with_keywords:
                     candidates = candidates_with_keywords
             
-            # Stage 4: Neural reranker
+            # Stage 4: Neural reranker (with gating)
             final_results = candidates
             if settings.RERANK_ENABLED and self.reranker:
-                rerank_top_k = min(settings.RERANK_TOP_K, len(candidates))
-                reranked = await self.reranker.rerank(query, candidates[:rerank_top_k], top_k * 2)
+                # Smart reranking: only rerank borderline scores
+                reranked = await self._maybe_rerank(query, candidates)
                 
+                # Apply threshold and cap
                 rerank_threshold = settings.RERANK_SCORE_THRESHOLD
                 final_results = [
                     r for r in reranked 
@@ -765,3 +827,56 @@ class RAGService(IRAGService):
                 break
 
         return out[:max_count]
+    
+    async def _extract_text_chunks_with_fallback(
+        self, file_path: str, file_type: str, document: ProcessedDocument, doc_id: str
+    ) -> List[DocumentChunk]:
+        """
+        Extract text with automatic OCR engine fallback.
+        Tries primary engine, then fallback if primary fails.
+        """
+        def update_page_progress(current_page: int, total_pages: int):
+            page_percent = (current_page / total_pages) * 65
+            overall_percent = 30 + int(page_percent)
+            progress_store.update(
+                doc_id, 
+                ProcessingStatus.EXTRACTING_TEXT, 
+                overall_percent,
+                f"Extracting text from page {current_page}/{total_pages}..."
+            )
+        
+        # Try primary processor
+        try:
+            processor = self.doc_processor_factory.get_processor(file_type)
+            chunks = await processor.process(file_path, file_type, update_page_progress)
+        except RuntimeError as e:
+            logger.warning(f"[OCR] Primary engine failed: {e}, trying fallback...")
+            
+            # Try fallback processor
+            try:
+                processor = self.doc_processor_factory.get_fallback_processor(file_type)
+                chunks = await processor.process(file_path, file_type, update_page_progress)
+            except RuntimeError as fallback_error:
+                raise DocumentProcessingError(
+                    f"All OCR engines failed. Last error: {fallback_error}",
+                    ErrorCode.PROCESSING_FAILED
+                )
+        
+        if not chunks:
+            raise DocumentProcessingError(
+                "No content extracted from document", 
+                ErrorCode.NO_TEXT_FOUND
+            )
+        
+        # Attach metadata
+        for chunk in chunks:
+            chunk.document_id = document.id
+            chunk.metadata.update({
+                "document_id": document.id, 
+                "document_name": document.filename
+            })
+        
+        # Debug save
+        self._save_chunks_for_debug(chunks, document.filename)
+        
+        return chunks

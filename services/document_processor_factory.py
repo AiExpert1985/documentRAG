@@ -10,6 +10,14 @@ from infrastructure.document_processors import (
 from config import settings
 from infrastructure.pdf_converters import PyMuPDFConverter
 
+import logging
+
+def _get_logger():
+    from config import settings
+    return logging.getLogger(settings.LOGGER_NAME)
+
+logger = _get_logger()
+
 class DocumentProcessorFactory:
     """
     Factory for creating OCR processors based on file type and OCR_ENGINE config.
@@ -63,3 +71,73 @@ class DocumentProcessorFactory:
             return self._create_ocr_processor(needs_pdf_converter=False)
         else:
             raise ValueError(f"Unsupported file type: {file_type}")
+        
+
+    def _build_processor(self, engine: str, file_type: str) -> IDocumentProcessor:
+        """
+        Build OCR processor for specific engine (bypasses config).
+        
+        Args:
+            engine: OCR engine name (easyocr, tesseract, paddleocr)
+            file_type: File type (pdf, jpg, png)
+        
+        Returns:
+            Configured processor instance
+        
+        Raises:
+            ValueError: If engine is unknown
+        """
+        processor_class = self._ocr_strategies.get(engine)
+        if not processor_class:
+            available = ", ".join(self._ocr_strategies.keys())
+            raise ValueError(f"Unknown OCR engine: '{engine}'. Available: {available}")
+        
+        # Add PDF converter only if processing PDFs
+        pdf_converter = None
+        if file_type == "pdf":
+            pdf_converter = self.pdf_converter_class()
+        
+        return processor_class(
+            pdf_converter=pdf_converter, # type: ignore
+            chunk_size=settings.CHUNK_SIZE, # type: ignore
+            chunk_overlap=settings.CHUNK_OVERLAP # type: ignore
+        )
+
+    def get_fallback_processor(self, file_type: str) -> IDocumentProcessor:
+        """
+        Get fallback OCR processor when primary engine fails.
+        
+        Tries engines in order: easyocr → tesseract → paddleocr
+        (excluding currently configured engine)
+        
+        Args:
+            file_type: File type being processed
+        
+        Returns:
+            Working processor instance
+        
+        Raises:
+            RuntimeError: If no OCR engines are available
+        """
+        # Get current engine from config
+        current = settings.OCR_ENGINE.lower()
+        
+        # Try fallbacks in priority order (excluding current)
+        fallbacks = [e for e in ["easyocr", "tesseract", "paddleocr"] if e != current]
+        
+        last_err = None
+        for engine in fallbacks:
+            try:
+                logger.info(f"[OCR] Attempting fallback engine: {engine}")
+                processor = self._build_processor(engine=engine, file_type=file_type)
+                logger.info(f"[OCR] ✓ Successfully loaded fallback: {engine}")
+                return processor
+            except Exception as e:
+                logger.warning(f"[OCR] ✗ Fallback {engine} failed: {e}")
+                last_err = e
+        
+        # All engines failed
+        raise RuntimeError(
+            f"No OCR engines available. Tried: {', '.join(fallbacks)}. "
+            f"Last error: {last_err}"
+        )

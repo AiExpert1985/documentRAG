@@ -74,10 +74,16 @@ class Settings(BaseSettings):
     LEXICAL_GATE_ENABLED: bool = True
     LEXICAL_MIN_KEYWORDS: int = 1
     
+    # Reranking configuration
     RERANK_ENABLED: bool = True
     RERANK_MODEL_NAME: str = "cross-encoder/ms-marco-MiniLM-L-6-v2"
     RERANK_SCORE_THRESHOLD: float = 0.50
     RERANK_TOP_K: int = 15
+
+    # NEW: Reranker gating (skip reranking for obvious hits/misses)
+    RERANK_GATE_LOW: float = 0.55   # Don't rerank if best score below this
+    RERANK_GATE_HIGH: float = 0.75  # Don't rerank if best score above this
+    RERANK_CANDIDATE_CAP: int = 15  # Max items to send to cross-encoder
 
     # Search defaults
     TOP_K: int = 5

@@ -10,7 +10,11 @@ from core.interfaces import IReranker
 from core.domain import ChunkSearchResult
 from config import settings
 
-logger = logging.getLogger(settings.LOGGER_NAME)
+def _get_logger():
+    from config import settings
+    return logging.getLogger(settings.LOGGER_NAME)
+
+logger = _get_logger()
 
 class CrossEncoderReranker(IReranker):
     """Multilingual cross-encoder for semantic precision."""

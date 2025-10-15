@@ -210,6 +210,8 @@ class IRAGService(ABC):
     """High-level RAG operations interface"""
 
     document_repo: IDocumentRepository
+    vector_store: IVectorStore
+    
 
     @abstractmethod
     async def get_status(self) -> Dict[str, Any]:
