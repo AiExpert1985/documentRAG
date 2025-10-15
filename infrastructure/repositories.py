@@ -23,7 +23,7 @@ class SQLDocumentRepository(IDocumentRepository):
             return None
         
         # Prevent accidental mutation of DB entity metadata
-        md = (db_doc.metadata or {}).copy()
+        md = (db_doc.meta or {}).copy()
         md.setdefault("timestamp", db_doc.timestamp.isoformat())
         md.setdefault("stored_filename", db_doc.stored_filename)
         
