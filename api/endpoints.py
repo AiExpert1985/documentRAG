@@ -364,65 +364,62 @@ async def health_check(rag_service: IRAGService = Depends(get_rag_service)):
     
 
 
-# @router.get("/page-image/highlighted/{token}")
-# async def get_highlighted_image(token: str, db: AsyncSession = Depends(get_session)):
-#     if not settings.ENABLE_HIGHLIGHT_PREVIEW:
-#         raise HTTPException(status_code=404, detail="Disabled")
-
-#     try:
-#         payload = verify(token)
-#     except ValueError:
-#         raise HTTPException(status_code=401, detail="Invalid or expired token")
-
-#     doc_id = payload.get("doc_id"); page_index = int(payload.get("page_index", -1))
-#     seg_ids = payload.get("segment_ids") or []; style_id = payload.get("style_id", settings.HIGHLIGHT_STYLE_ID)
-#     if not doc_id or page_index < 0:
-#         raise HTTPException(status_code=400, detail="Invalid request")
-
-#     repo = SQLDocumentRepository(db)
-#     doc = await repo.get_by_id(doc_id)
-#     if not doc:
-#         raise HTTPException(status_code=404, detail="Document not found")
-
-#     meta: Dict[str, Any] = doc.metadata or {}
-#     rel = (meta.get("page_image_paths") or {}).get(str(page_index))
-#     if not rel:
-#         raise HTTPException(status_code=404, detail="Page image not found")
-
-#     image_path = Path(settings.UPLOADS_DIR)/rel
-#     if not image_path.exists():
-#         raise HTTPException(status_code=404, detail="Page image file missing")
-
-#     page_segments: List[Dict[str, Any]] = (meta.get("segments") or {}).get(str(page_index), [])
-#     if not page_segments:
-#         return Response(content=image_path.read_bytes(), media_type="image/webp",
-#                         headers={"X-Highlight-Status":"missing_boxes"})
-
-#     wanted=set(seg_ids) if seg_ids else set()
-#     bboxes=[]
-#     for seg in page_segments:
-#         if wanted and seg.get("segment_id") not in wanted:
-#             continue
-#         if seg.get("bbox"):
-#             bboxes.append(tuple(float(x) for x in seg["bbox"]))
-
-#     if not bboxes:
-#         return Response(content=image_path.read_bytes(), media_type="image/webp",
-#                         headers={"X-Highlight-Status":"missing_boxes"})
-
-#     try:
-#         img = ImageHighlighter.draw_highlights(
-#             image_path=str(image_path),
-#             normalized_bboxes=bboxes,
-#             style_id=style_id,
-#             max_regions=settings.HIGHLIGHT_MAX_REGIONS,
-#             timeout_sec=settings.HIGHLIGHT_TIMEOUT_SEC,
-#             fmt="WEBP",
-#         )
-#         return Response(content=img, media_type="image/webp", headers={"X-Highlight-Status":"ok"})
-#     except Exception:
-#         return Response(content=image_path.read_bytes(), media_type="image/webp",
-#                         headers={"X-Highlight-Status":"error"})
+@router.get("/page-image/highlighted/{token}")
+async def get_highlighted_image(
+    token: str, 
+    db: AsyncSession = Depends(get_db)  # Fix: use get_db not get_session
+):
+    if not settings.ENABLE_HIGHLIGHT_PREVIEW:
+        raise HTTPException(status_code=404, detail="Disabled")
+    
+    try:
+        payload = verify(token)
+    except ValueError:
+        raise HTTPException(status_code=401, detail="Invalid or expired token")
+    
+    doc_id = payload.get("doc_id")
+    page_index = int(payload.get("page_index", -1))
+    seg_ids = payload.get("segment_ids") or []
+    
+    if not doc_id or page_index < 0:
+        raise HTTPException(status_code=400, detail="Invalid request")
+    
+    repo = SQLDocumentRepository(db)
+    doc = await repo.get_by_id(doc_id)
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+    
+    meta = doc.metadata or {}
+    rel = (meta.get("page_image_paths") or {}).get(str(page_index))
+    if not rel:
+        raise HTTPException(status_code=404, detail="Page image not found")
+    
+    image_path = Path(settings.UPLOADS_DIR) / rel
+    if not image_path.exists():
+        raise HTTPException(status_code=404, detail="Image file missing")
+    
+    page_segments = (meta.get("segments") or {}).get(str(page_index), [])
+    
+    # Filter by segment_ids
+    wanted = set(seg_ids)
+    bboxes = []
+    for seg in page_segments:
+        if seg.get("segment_id") not in wanted:
+            continue
+        if seg.get("bbox"):
+            bboxes.append(tuple(float(x) for x in seg["bbox"]))
+    
+    if not bboxes:
+        return Response(content=image_path.read_bytes(), media_type="image/png")
+    
+    img_bytes = ImageHighlighter.draw_highlights(
+        str(image_path),
+        bboxes,
+        max_regions=settings.HIGHLIGHT_MAX_REGIONS,
+        timeout_sec=2,
+        fmt="WEBP"
+    )
+    return Response(content=img_bytes, media_type="image/webp")
 
 
 @router.get("/page-image/highlighted/{document_id}/{page_number}")
