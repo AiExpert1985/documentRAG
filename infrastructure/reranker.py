@@ -43,9 +43,9 @@ class CrossEncoderReranker(IReranker):
             model = CrossEncoder(self.model_name)
             CrossEncoderReranker._model = model
             CrossEncoderReranker._model_name = self.model_name
-            logger.info(f"[RERANK] ✓ Loaded successfully")
+            logger.info(f"[RERANK] Loaded successfully")
         except Exception as e:
-            logger.error(f"[RERANK] ✗ Failed: {e}")
+            logger.error(f"[RERANK] Failed: {e}")
             raise RuntimeError(f"Could not load reranker: {e}")
     
     async def rerank(

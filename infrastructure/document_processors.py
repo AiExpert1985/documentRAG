@@ -464,19 +464,15 @@ class BaseOCRProcessor(IDocumentProcessor):
         return chunks
     
     async def _segment_paragraphs(self, lines: List[LineRec], page_index: int) -> List[SegmentRec]:
-        """
-        Segment paragraphs using your existing arabic/structure segmenter,
-        then map each segment back to contributing line_ids.
-        """
-        # 1) Rebuild page text in reading order (your OCR pipeline should already sort lines top->bottom)
+        """Segment paragraphs with safety net for oversized segments."""
+        
+        # 1) Rebuild page text
         page_text = "\n".join(_normalize_spaces(ln["text"]) for ln in lines if ln.get("text"))
         if not page_text:
             return []
 
-        # 2) Call your segmenter
-        # NOTE: import here to avoid import cycles / optional engines
-        from utils.arabic_segmenter import segment_arabic 
-        # segment_arabic should return list of {"text": "...", "kind": "paragraph"/...}
+        # 2) Call segmenter
+        from utils.arabic_segmenter import segment_arabic
         segments = segment_arabic(page_text) or []
 
         # 3) Map segments to line_ids
@@ -486,34 +482,49 @@ class BaseOCRProcessor(IDocumentProcessor):
             if not seg_text:
                 continue
 
-            # Heuristic: collect line_ids whose text has strong overlap with seg_text
-            line_ids: List[str] = []
+            # Find matching lines
+            candidate_lines = []
             for ln in lines:
                 ln_text = _normalize_spaces(ln.get("text", ""))
                 if not ln_text:
                     continue
-                # quick substring fast path
-                if ln_text and (ln_text in seg_text or seg_text in ln_text):
-                    line_ids.append(ln["line_id"])
-                    continue
-                # fallback: ratio threshold
-                if _text_overlap_ratio(ln_text, seg_text) >= 0.65:
-                    line_ids.append(ln["line_id"])
-
-            if not line_ids:
-                # fallback: try greedy assignment by proximity (optional)
-                # For MVP we skip this to avoid over-highlighting
+                
+                if ln_text in seg_text or seg_text in ln_text or _text_overlap_ratio(ln_text, seg_text) >= 0.65:
+                    candidate_lines.append(ln)
+            
+            if not candidate_lines:
                 continue
 
-            results.append({
-                "segment_id": f"seg_{uuid.uuid4().hex[:8]}",
-                "line_ids": line_ids,
-                "text": seg_text,
-                "type": seg.get("kind", "paragraph"),
-                "page_index": page_index
-            })
+            line_ids = [ln["line_id"] for ln in candidate_lines]
+            
+            # NEW: Safety check - split if segment has too many lines
+            MAX_LINES_PER_SEGMENT = 8
+            if len(line_ids) > MAX_LINES_PER_SEGMENT:
+                logger.warning(
+                    f"Page {page_index}: Segment has {len(line_ids)} lines (>{MAX_LINES_PER_SEGMENT}). "
+                    f"Splitting into smaller chunks. Check arabic_segmenter logic."
+                )
+                
+                # Split into chunks of MAX_LINES_PER_SEGMENT
+                for i in range(0, len(line_ids), MAX_LINES_PER_SEGMENT):
+                    chunk_line_ids = line_ids[i:i + MAX_LINES_PER_SEGMENT]
+                    results.append({
+                        "segment_id": f"seg_{uuid.uuid4().hex[:8]}",
+                        "line_ids": chunk_line_ids,
+                        "text": seg_text,  # Original text (chunking will handle excerpts)
+                        "type": seg.get("kind", "paragraph"),
+                        "page_index": page_index
+                    })
+            else:
+                results.append({
+                    "segment_id": f"seg_{uuid.uuid4().hex[:8]}",
+                    "line_ids": line_ids,
+                    "text": seg_text,
+                    "type": seg.get("kind", "paragraph"),
+                    "page_index": page_index
+                })
 
-        # MVP guard: if segmenter returned nothing (e.g., non-Arabic), treat each line as segment
+        # MVP guard: if segmenter returned nothing, treat each line as segment
         if not results and lines:
             for ln in lines:
                 if not ln.get("text"):

@@ -49,6 +49,9 @@ from api.schemas import (
 )
 from utils.common import validate_document_id
 from infrastructure.progress_store import progress_store
+import logging
+
+logger = logging.getLogger(settings.LOGGER_NAME)
 
 router = APIRouter()
 
@@ -162,24 +165,11 @@ async def search_pages_endpoint(
             download_url=(base_url + p.download_url) if p.download_url else "",
         )
 
-        # 🔶 NEW: load page segments from document metadata -> build token
-        try:
-            doc = await rag_service.document_repo.get_by_id(p.document_id)
-            meta = (doc.metadata or {}) if doc else {}
-            page_segments = (meta.get("segments") or {}).get(str(p.page_number), [])
-            seg_ids = [s.get("segment_id") for s in page_segments if s.get("segment_id")]
-            if seg_ids:
-                item.segment_ids = seg_ids[: settings.HIGHLIGHT_MAX_REGIONS]
-                item.highlight_token = sign({
-                    "doc_id": p.document_id,
-                    "page_index": p.page_number,
-                    "segment_ids": item.segment_ids,
-                    "style_id": settings.HIGHLIGHT_STYLE_ID,
-                    "source_version": "v1"
-                }, exp_seconds=120)
-        except Exception:
-            # If anything fails here, we just send the basic item (no highlights)
-            pass
+        # Use segment_ids and highlight_token from rag_service
+        if hasattr(p, 'segment_ids') and p.segment_ids:
+            item.segment_ids = p.segment_ids
+        if hasattr(p, 'highlight_token') and p.highlight_token:
+            item.highlight_token = p.highlight_token
 
         results.append(item)
 
@@ -188,60 +178,6 @@ async def search_pages_endpoint(
         query=chat_request.question,
         results=results,
         total_results=len(results),
-    )
-
-
-# ---------- Serve page image (original or thumbnail) ----------
-@router.get("/page-image/{document_id}/{page_number}")
-async def get_page_image(
-    document_id: str,
-    page_number: int,
-    size: Literal["original", "thumbnail"] = "original",
-    rag_service: IRAGService = Depends(get_rag_service),
-):
-    if not validate_document_id(document_id):
-        raise HTTPException(status_code=422, detail="Invalid document ID format")
-
-    # Confirm doc exists (same behavior as before)
-    doc = await rag_service.document_repo.get_by_id(document_id)
-    if not doc:
-        raise HTTPException(status_code=404, detail="Document not found")
-
-    suffix = "_thumb.webp" if size == "thumbnail" else ".png"
-    rel = f"page_images/{document_id}/page_{page_number:03d}{suffix}"
-    full = _safe_file_path(settings.UPLOADS_DIR, rel)
-
-    if not full.exists():
-        raise HTTPException(status_code=404, detail="Image file not found")
-
-    media_type = "image/webp" if size == "thumbnail" else "image/png"
-    return FileResponse(
-        path=str(full),
-        media_type=media_type,
-        filename=Path(rel).name,
-        headers={"Cache-Control": "public, max-age=31536000, immutable"},
-    )
-
-# ---------- Download original document (uses safe path) ----------
-@router.get("/download/{document_id}")
-async def download_document(
-    document_id: str, rag_service: IRAGService = Depends(get_rag_service)
-):
-    if not validate_document_id(document_id):
-        raise HTTPException(status_code=422, detail="Invalid document ID format")
-
-    doc_details = await rag_service.get_document_with_path(document_id)
-    if not doc_details:
-        raise HTTPException(status_code=404, detail="Document not found")
-
-    full = _safe_file_path(settings.UPLOADS_DIR, doc_details["path"])
-    if not full.exists():
-        raise HTTPException(status_code=404, detail="File not found")
-
-    return FileResponse(
-        path=str(full),
-        filename=doc_details["original_filename"],
-        media_type="application/octet-stream",
     )
 
 
@@ -364,10 +300,10 @@ async def health_check(rag_service: IRAGService = Depends(get_rag_service)):
     
 
 
-@router.get("/page-image/highlighted/{token}")
+@router.get("/page-image/by-token/{token}")
 async def get_highlighted_image(
     token: str, 
-    db: AsyncSession = Depends(get_db)  # Fix: use get_db not get_session
+    db: AsyncSession = Depends(get_db)
 ):
     if not settings.ENABLE_HIGHLIGHT_PREVIEW:
         raise HTTPException(status_code=404, detail="Disabled")
@@ -399,6 +335,9 @@ async def get_highlighted_image(
         raise HTTPException(status_code=404, detail="Image file missing")
     
     page_segments = (meta.get("segments") or {}).get(str(page_index), [])
+
+    for seg in page_segments:
+        logger.info(f"Segment {seg.get('segment_id')}: {len(seg.get('line_ids', []))} lines, bbox: {seg.get('bbox')}")
     
     # Filter by segment_ids
     wanted = set(seg_ids)
@@ -409,6 +348,16 @@ async def get_highlighted_image(
         if seg.get("bbox"):
             bboxes.append(tuple(float(x) for x in seg["bbox"]))
     
+    # 🔍 ADD DEBUG LOGS HERE (right after the filter loop):
+    logger.info(f"Token payload: {payload}")
+    logger.info(f"Wanted segment_ids: {seg_ids}")
+    logger.info(f"All page segments: {[s.get('segment_id') for s in page_segments]}")
+    logger.info(f"Page has {len(page_segments)} segments")
+    logger.info(f"Filtered to {len(bboxes)} bboxes")
+    if not bboxes:
+        logger.warning("NO BBOXES MATCHED - returning original image")
+    
+    # Rest of your code...
     if not bboxes:
         return Response(content=image_path.read_bytes(), media_type="image/png")
     
@@ -422,47 +371,55 @@ async def get_highlighted_image(
     return Response(content=img_bytes, media_type="image/webp")
 
 
-@router.get("/page-image/highlighted/{document_id}/{page_number}")
-async def get_highlighted_image_direct(
+# ---------- Serve page image (original or thumbnail) ----------
+@router.get("/page-image/{document_id}/{page_number}")
+async def get_page_image(
     document_id: str,
     page_number: int,
-    db: AsyncSession = Depends(get_db),   # ✅ inject an AsyncSession
+    size: Literal["original", "thumbnail"] = "original",
+    rag_service: IRAGService = Depends(get_rag_service),
 ):
-    repo = SQLDocumentRepository(db)
-    doc = await repo.get_by_id(document_id)
+    if not validate_document_id(document_id):
+        raise HTTPException(status_code=422, detail="Invalid document ID format")
+
+    # Confirm doc exists (same behavior as before)
+    doc = await rag_service.document_repo.get_by_id(document_id)
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found")
 
-    meta = doc.metadata or {}
-    # Paths are stored with string keys
-    page_images = (meta.get("page_image_paths") or {})
-    rel = page_images.get(str(page_number))
-    if not rel:
-        raise HTTPException(status_code=404, detail="Page image not found")
+    suffix = "_thumb.webp" if size == "thumbnail" else ".png"
+    rel = f"page_images/{document_id}/page_{page_number:03d}{suffix}"
+    full = _safe_file_path(settings.UPLOADS_DIR, rel)
 
-    # Normalized highlight boxes per page (saved by RAGService)
-    segments_by_page = (meta.get("segments") or {})
-    segs = segments_by_page.get(str(page_number), [])  # list of {"bbox": [x,y,w,h], ...}
+    if not full.exists():
+        raise HTTPException(status_code=404, detail="Image file not found")
 
-    # Collect normalized bboxes
-    bboxes = []
-    for seg in segs[: settings.HIGHLIGHT_MAX_REGIONS]:
-        bbox = seg.get("bbox")
-        if isinstance(bbox, (list, tuple)) and len(bbox) == 4:
-            # ensure float tuple
-            x, y, w, h = bbox
-            bboxes.append((float(x), float(y), float(w), float(h)))
-
-    abs_path = Path(settings.UPLOADS_DIR) / rel
-    if not abs_path.exists():
-        raise HTTPException(status_code=404, detail="Image file missing")
-
-    # Draw and return WEBP (fast + small)
-    img_bytes = ImageHighlighter.draw_highlights(
-        str(abs_path),
-        bboxes,
-        max_regions=settings.HIGHLIGHT_MAX_REGIONS,
-        timeout_sec=2,
-        fmt="WEBP",
+    media_type = "image/webp" if size == "thumbnail" else "image/png"
+    return FileResponse(
+        path=str(full),
+        media_type=media_type,
+        filename=Path(rel).name,
+        headers={"Cache-Control": "public, max-age=31536000, immutable"},
     )
-    return Response(content=img_bytes, media_type="image/webp")
+
+# ---------- Download original document (uses safe path) ----------
+@router.get("/download/{document_id}")
+async def download_document(
+    document_id: str, rag_service: IRAGService = Depends(get_rag_service)
+):
+    if not validate_document_id(document_id):
+        raise HTTPException(status_code=422, detail="Invalid document ID format")
+
+    doc_details = await rag_service.get_document_with_path(document_id)
+    if not doc_details:
+        raise HTTPException(status_code=404, detail="Document not found")
+
+    full = _safe_file_path(settings.UPLOADS_DIR, doc_details["path"])
+    if not full.exists():
+        raise HTTPException(status_code=404, detail="File not found")
+
+    return FileResponse(
+        path=str(full),
+        filename=doc_details["original_filename"],
+        media_type="application/octet-stream",
+    )

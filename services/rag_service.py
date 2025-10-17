@@ -105,7 +105,7 @@ def _build_page_result_item(self, page_hit):
             "segment_ids": seg_ids[: settings.HIGHLIGHT_MAX_REGIONS],
             "style_id": settings.HIGHLIGHT_STYLE_ID,
             "source_version": "v1",
-        }, exp_seconds=120)
+        }, exp_seconds=600)
 
     # URLs
     image_url = getattr(page_hit, "image_url", None)
@@ -821,10 +821,13 @@ class RAGService(IRAGService):
             groups[key].append(r)
 
         pages: List[PageSearchResult] = []
+        highlight_stats = {"pages_with_highlights": 0, "total_pages": 0}  # NEW: Telemetry
 
         for (doc_id, page_num), items in groups.items():
             if not items:
                 continue
+
+            highlight_stats["total_pages"] += 1  # NEW: Count all pages
 
             # Scoring: MaxP (primary)
             max_score = max((it.score for it in items), default=0.0)
@@ -849,6 +852,61 @@ class RAGService(IRAGService):
 
             doc_name = items[0].chunk.metadata.get("document_name", "Unknown")
 
+            # ========== PRODUCTION-READY SEGMENT COLLECTION ==========
+            # 1. Filter and sort chunks by relevance
+            relevant_chunks = [
+                item for item in items 
+                if item.score >= settings.HIGHLIGHT_SCORE_THRESHOLD
+            ]
+            
+            # 2. Cap at chunk level (not segment level) for efficiency
+            relevant_chunks = sorted(
+                relevant_chunks, 
+                key=lambda x: x.score, 
+                reverse=True
+            )[:settings.HIGHLIGHT_MAX_REGIONS]
+
+            # 3. Collect segments from capped relevant chunks
+            if relevant_chunks:
+                seg_ids_set = {
+                    seg_id 
+                    for item in relevant_chunks 
+                    for seg_id in (item.chunk.metadata.get("segment_ids") or [])
+                }
+                
+                # 4. Deterministic ordering (critical for reproducibility)
+                seg_ids = sorted(seg_ids_set)
+                
+                if seg_ids:
+                    highlight_stats["pages_with_highlights"] += 1  # NEW: Track success
+                else:
+                    # Edge case: relevant chunks exist but have no segment metadata
+                    logger.warning(
+                        f"Page {doc_id}:{page_num} has {len(relevant_chunks)} relevant chunks "
+                        f"(scores: {[f'{c.score:.2f}' for c in relevant_chunks[:3]]}) "
+                        f"but no segment_ids in metadata. OCR may have failed."
+                    )
+            else:
+                # No chunks meet threshold - show page without highlights
+                seg_ids = []
+                logger.info(
+                    f"Page {doc_id}:{page_num}: No chunks above threshold "
+                    f"({settings.HIGHLIGHT_SCORE_THRESHOLD}). Max score: {max_score:.3f}. "
+                    f"Total chunks on page: {len(items)}"
+                )
+            # ========== END PRODUCTION-READY SEGMENT COLLECTION ==========
+
+            # 5. Build highlight token (explicit None if no segments)
+            highlight_token = None
+            if settings.ENABLE_HIGHLIGHT_PREVIEW and seg_ids:
+                highlight_token = sign({
+                    "doc_id": doc_id,
+                    "page_index": page_num,
+                    "segment_ids": seg_ids,  # Already capped and sorted
+                    "style_id": settings.HIGHLIGHT_STYLE_ID,
+                    "v": 1,
+                }, exp_seconds=600)
+
             pages.append(PageSearchResult(
                 document_id=doc_id,
                 document_name=doc_name,
@@ -859,11 +917,20 @@ class RAGService(IRAGService):
                 thumbnail_url=thumbnail_url,
                 highlights=highlights,
                 download_url=f"/download/{doc_id}",
+                segment_ids=seg_ids or None,  # Explicit None if empty
+                highlight_token=highlight_token,
             ))
+
+        # NEW: Log highlight coverage metric
+        if highlight_stats["total_pages"] > 0:
+            coverage = (highlight_stats["pages_with_highlights"] / highlight_stats["total_pages"]) * 100
+            logger.info(
+                f"[HIGHLIGHT] Query coverage: {highlight_stats['pages_with_highlights']}/{highlight_stats['total_pages']} "
+                f"pages ({coverage:.1f}%) have highlights at threshold {settings.HIGHLIGHT_SCORE_THRESHOLD}"
+            )
 
         pages.sort(key=lambda p: (p.score, p.chunk_count), reverse=True)
         return pages[:top_k]
-
 
     def _extract_highlights(
         self,

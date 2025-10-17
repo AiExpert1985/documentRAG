@@ -130,10 +130,10 @@ class DocumentProcessorFactory:
             try:
                 logger.info(f"[OCR] Attempting fallback engine: {engine}")
                 processor = self._build_processor(engine=engine, file_type=file_type)
-                logger.info(f"[OCR] ✓ Successfully loaded fallback: {engine}")
+                logger.info(f"[OCR] Successfully loaded fallback: {engine}")
                 return processor
             except Exception as e:
-                logger.warning(f"[OCR] ✗ Fallback {engine} failed: {e}")
+                logger.warning(f"[OCR] Fallback {engine} failed: {e}")
                 last_err = e
         
         # All engines failed

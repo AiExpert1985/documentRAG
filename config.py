@@ -104,6 +104,7 @@ class Settings(BaseSettings):
     HIGHLIGHT_STYLE_ID: str = "default"
     HIGHLIGHT_MAX_REGIONS: int = 10
     HIGHLIGHT_TIMEOUT_SEC: int = 2
+    HIGHLIGHT_SCORE_THRESHOLD: float = 0.65  # Tune 0.55-0.75 based on noise
 
     # Token secret (SET IN .env FOR PROD)
     HIGHLIGHT_TOKEN_SECRET: str = "CHANGE_ME_IN_PROD"

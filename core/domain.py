@@ -77,7 +77,9 @@ class PageSearchResult:
     page_number: int
     score: float
     chunk_count: int
-    image_url: str               # relative path: /page-image/<doc>/<page>
-    thumbnail_url: str           # relative path: /page-image/<doc>/<page>?size=thumbnail
+    image_url: str               
+    thumbnail_url: str           
     highlights: List[str]
-    download_url: Optional[str] = None  # relative path: /download/<doc>
+    download_url: Optional[str] = None
+    segment_ids: Optional[List[str]] = None      # ADD THIS
+    highlight_token: Optional[str] = None         # ADD THIS
