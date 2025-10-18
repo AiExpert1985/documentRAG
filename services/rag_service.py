@@ -955,6 +955,11 @@ class RAGService(IRAGService):
                 doc_id   = page_data["document_id"]
                 page_idx = page_data["page_index"]
 
+                # ✅ NORMALIZE: Handle 0-indexed chunks (convert to 1-indexed for storage lookup)
+                if page_idx == 0:
+                    logger.warning(f"[SEARCH-PAGES] Normalized page_idx from 0 to 1 for doc={doc_id}")
+                    page_idx = 1
+
                 doc = await self.document_repo.get_by_id(doc_id)
                 if not doc:
                     continue
@@ -974,12 +979,30 @@ class RAGService(IRAGService):
                     txt = getattr(h.chunk, "content", "") if hasattr(h, "chunk") else ""
                     highlights.append(txt[:150] + ("..." if len(txt) > 150 else ""))
 
-                # Prefer line IDs; fall back to segments only if needed
-                line_ids = self._select_line_ids_for_token(chunk_evidence)
-                seg_ids  = [] if line_ids else self._select_segment_ids_for_token(chunk_evidence)
+                # ✅ HYBRID CASCADE: line hits → chunk-based lines → segments
+                line_evidence = page_data["evidence"]["lines"]
+                chunk_evidence = page_data["evidence"]["chunks"]
 
-                if settings.ENABLE_HYBRID_TELEMETRY and seg_ids and not line_ids:
-                    logger.info(f"[HIGHLIGHT] Fallback to segments for doc={doc_id} page={page_idx}")
+                # Priority 1: Direct line retriever output (most accurate)
+                line_ids = self._select_line_ids_from_line_hits(line_evidence)
+
+                # Priority 2: Extract lines from chunk metadata (if no direct line hits)
+                if not line_ids:
+                    line_ids = self._select_line_ids_for_token(chunk_evidence)
+
+                # Priority 3: Fallback to segments (last resort)
+                seg_ids = [] if line_ids else self._select_segment_ids_for_token(chunk_evidence)
+
+                # Telemetry
+                if settings.ENABLE_HYBRID_TELEMETRY:
+                    source = "line_hits" if line_evidence and line_ids else \
+                            "chunk_lines" if line_ids else \
+                            "segments" if seg_ids else "none"
+                    logger.info(
+                        f"[HIGHLIGHT] doc={doc_id} page={page_idx} source={source} "
+                        f"line_ev={len(line_evidence)} chunk_ev={len(chunk_evidence)} "
+                        f"line_ids={len(line_ids)} seg_ids={len(seg_ids)}"
+                    )
 
                 highlight_token = None
                 if settings.ENABLE_HIGHLIGHT_PREVIEW and (line_ids or seg_ids):
@@ -992,7 +1015,7 @@ class RAGService(IRAGService):
                         payload["line_ids"] = line_ids
                     elif seg_ids:
                         payload["segment_ids"] = seg_ids
-                    highlight_token = sign(payload, exp_seconds=600)
+                    highlight_token = sign(payload, exp_seconds=3600)
 
                 results.append(PageSearchResult(
                     document_id=doc_id,
@@ -1177,3 +1200,32 @@ class RAGService(IRAGService):
         
         ordered = sorted(seg_scores.items(), key=lambda kv: (-kv[1], kv[0]))
         return [sid for sid, _ in ordered[:settings.HIGHLIGHT_MAX_REGIONS]]
+    
+    def _select_line_ids_from_line_hits(self, line_hits):
+        """
+        Pick line IDs directly from line retriever hits (preferred method).
+        Score-aware and deterministic ordering.
+        """
+        if not line_hits:
+            return []
+        
+        best = {}  # line_id -> best score
+        for h in line_hits:
+            # Line hits have line_id as attribute (not in metadata)
+            lid = getattr(h, "line_id", None) or getattr(h, "id", None)
+            if not lid:
+                continue
+            
+            sc = float(getattr(h, "score", 0.0) or 0.0)
+            if sc < settings.HIGHLIGHT_SCORE_THRESHOLD:
+                continue
+            
+            if lid not in best or sc > best[lid]:
+                best[lid] = sc
+        
+        if not best:
+            return []
+        
+        # Sort by score desc, then line_id asc (deterministic)
+        ordered = sorted(best.items(), key=lambda kv: (-kv[1], kv[0]))
+        return [lid for lid, _ in ordered[:settings.HIGHLIGHT_MAX_REGIONS]]

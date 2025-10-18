@@ -326,47 +326,63 @@ async def get_highlighted_image(
     
     meta = doc.metadata or {}
     page_images = meta.get("page_image_paths", {})
+
+    # ✅ TYPE-TOLERANT LOOKUP: Try str(page_index) then page_index
     rel_path = page_images.get(str(page_index))
+    if rel_path is None:
+        rel_path = page_images.get(page_index)
+
     if not rel_path:
+        logger.warning(
+            f"[IMG] Page image not found: doc={doc_id} page={page_index}. "
+            f"Available keys={list(page_images.keys())[:5]}"
+        )
         raise HTTPException(status_code=404, detail="Page image not found")
-    
+
     image_path = Path(settings.UPLOADS_DIR) / rel_path
     if not image_path.exists():
+        logger.error(f"[IMG] File missing on disk: {image_path}")
         raise HTTPException(status_code=404, detail="Image file missing")
-    
-    # Extract lines and segments
+
+    # Extract lines and segments (type-tolerant)
     line_ids = payload.get("line_ids") or []
     seg_ids  = payload.get("segment_ids") or []
-    
-    page_lines = (meta.get("lines") or {}).get(str(page_index), [])
-    page_segments = (meta.get("segments") or {}).get(str(page_index), [])
+
+    # ✅ TYPE-TOLERANT METADATA LOOKUP
+    lines_dict = meta.get("lines") or {}
+    segments_dict = meta.get("segments") or {}
+
+    page_lines = lines_dict.get(str(page_index), [])
+    if not page_lines:
+        page_lines = lines_dict.get(page_index, [])
+
+    page_segments = segments_dict.get(str(page_index), [])
+    if not page_segments:
+        page_segments = segments_dict.get(page_index, [])
     
     # Build bboxes (prefer lines, fallback to segments)
     bboxes = []
     if line_ids:
-        lookup = {ln["line_id"]: ln["bbox"] for ln in page_lines}
+        lookup = {ln["line_id"]: ln["bbox"] for ln in page_lines if ln.get("bbox")}
         for lid in line_ids:
             if lid in lookup:
                 bboxes.append(tuple(float(x) for x in lookup[lid]))
     elif seg_ids:
-        lookup = {sg["segment_id"]: sg["bbox"] for sg in page_segments}
+        lookup = {sg["segment_id"]: sg["bbox"] for sg in page_segments if sg.get("bbox")}
         for sid in seg_ids:
             if sid in lookup:
                 bboxes.append(tuple(float(x) for x in lookup[sid]))
-    
+
+    # ✅ DIAGNOSTIC LOG
+    logger.info(
+        f"[IMG] doc={doc_id} page={page_index} "
+        f"line_ids={len(line_ids)} seg_ids={len(seg_ids)} "
+        f"matched_bboxes={len(bboxes)}"
+    )
+
     # No highlights → return original image
     if not bboxes:
         return Response(content=image_path.read_bytes(), media_type="image/png")
-    
-    # DUMB RENDERER: draw exactly what we give, no merging
-    img_bytes = ImageHighlighter.draw_highlights(
-        str(image_path),
-        bboxes,
-        max_regions=settings.HIGHLIGHT_MAX_REGIONS,
-        timeout_sec=2,
-        fmt="WEBP"
-    )
-    return Response(content=img_bytes, media_type="image/webp")
 
 
 # ---------- Serve page image (original or thumbnail) ----------

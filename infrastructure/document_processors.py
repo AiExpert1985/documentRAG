@@ -282,7 +282,8 @@ class BaseOCRProcessor(IDocumentProcessor):
                         "page": page_index,
                         "source": source,
                         "segment_kind": seg.get("type", "paragraph"),
-                        "segment_id": seg["segment_id"]  # Critical for highlighting
+                        "segment_id": seg["segment_id"],
+                        "line_ids": seg.get("line_ids", [])  # ✅ ADD THIS LINE
                     }
                 )
             )

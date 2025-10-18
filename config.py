@@ -103,7 +103,7 @@ class Settings(BaseSettings):
     ENABLE_HIGHLIGHT_PREVIEW: bool = True
     HIGHLIGHT_STYLE_ID: str = "default"
     HIGHLIGHT_MAX_REGIONS: int = 10
-    HIGHLIGHT_TIMEOUT_SEC: int = 2
+    HIGHLIGHT_TIMEOUT_SEC: int = 10
 
     # Token secret (SET IN .env FOR PROD)
     HIGHLIGHT_TOKEN_SECRET: str = "CHANGE_ME_IN_PROD"
