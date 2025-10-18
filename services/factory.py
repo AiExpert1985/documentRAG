@@ -33,6 +33,18 @@ def get_vector_store() -> IVectorStore:
     #     return PineconeVectorStore(...)
     else:
         raise ValueError(f"Unknown vector store type: {settings.VECTOR_STORE_TYPE}")
+    
+def get_line_vector_store() -> IVectorStore:
+    """Create line vector store (separate collection/index for line-level retrieval)."""
+    if settings.VECTOR_STORE_TYPE == "chromadb":
+        client = chromadb.PersistentClient(path=settings.VECTOR_DB_PATH)
+        return ChromaDBVectorStore(client, collection_name="lines")
+    elif settings.VECTOR_STORE_TYPE.lower() == "faiss":
+        from pathlib import Path
+        line_index_path = str(Path(settings.VECTOR_DB_PATH) / "lines")
+        return FAISSVectorStore(index_path=line_index_path)
+    else:
+        raise ValueError(f"Unknown vector store type: {settings.VECTOR_STORE_TYPE}")
 
 def get_embedding_service() -> IEmbeddingService:
     """Create embedding service based on configuration."""
@@ -65,22 +77,23 @@ def get_reranker() -> Optional[IReranker]:
         return None
     return CrossEncoderReranker(settings.RERANK_MODEL_NAME)
 
-# Update get_rag_service to inject reranker:
 def get_rag_service(
     vector_store: IVectorStore = Depends(get_vector_store),
+    line_vector_store: IVectorStore = Depends(get_line_vector_store),  # << ADD THIS LINE
     embedding_service: IEmbeddingService = Depends(get_embedding_service),
     doc_processor_factory: DocumentProcessorFactory = Depends(get_document_processor_factory),
     file_storage: IFileStorage = Depends(get_file_storage),
     document_repo: IDocumentRepository = Depends(get_document_repository),
     message_repo: IMessageRepository = Depends(get_message_repository),
-    reranker: IReranker = Depends(get_reranker)  # NEW
+    reranker: IReranker = Depends(get_reranker)
 ) -> IRAGService:
     return RAGService(
         vector_store=vector_store,
+        line_vector_store=line_vector_store,  # << ADD THIS LINE
         doc_processor_factory=doc_processor_factory,
         embedding_service=embedding_service,
         file_storage=file_storage,
         document_repo=document_repo,
         message_repo=message_repo,
-        reranker=reranker  # NEW
+        reranker=reranker
     )

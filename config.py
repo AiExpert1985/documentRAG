@@ -104,10 +104,36 @@ class Settings(BaseSettings):
     HIGHLIGHT_STYLE_ID: str = "default"
     HIGHLIGHT_MAX_REGIONS: int = 10
     HIGHLIGHT_TIMEOUT_SEC: int = 2
-    HIGHLIGHT_SCORE_THRESHOLD: float = 0.65  # Tune 0.55-0.75 based on noise
 
     # Token secret (SET IN .env FOR PROD)
     HIGHLIGHT_TOKEN_SECRET: str = "CHANGE_ME_IN_PROD"
+
+    # ---------- Highlight / Search knobs ----------
+    HIGHLIGHT_SCORE_THRESHOLD: float = 0.65
+    HIGHLIGHT_MERGE_POLICY: str = "none"
+
+    # Hybrid retrieval caps
+    HYBRID_TOP_LINES: int = 400
+    HYBRID_TOP_CHUNKS: int = 100
+    HYBRID_PER_PAGE_LINES: int = 6
+
+    # Perf guards
+    HYBRID_RETRIEVAL_TIMEOUT_SEC: float = 5.0
+    HYBRID_MAX_TOTAL_HITS: int = 600  # cap before normalization
+
+    # Saturating aggregation (lines)
+    HYBRID_ALPHA: float = 0.7
+    HYBRID_LAMBDA: float = 0.9
+
+    # Fusion weight
+    HYBRID_BETA: float = 0.6
+
+    # Line indexing filters
+    LINE_MIN_CHARS: int = 20
+    LINE_EXCLUDE_HEADER_FOOTER_BAND: float = 0.06
+
+    # Telemetry
+    ENABLE_HYBRID_TELEMETRY: bool = True
 
     class Config:
         env_file = ".env"

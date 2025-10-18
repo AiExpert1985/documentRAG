@@ -301,16 +301,28 @@ class BaseOCRProcessor(IDocumentProcessor):
             if "segment_id" in doc.metadata:
                 segment_ids.append(doc.metadata["segment_id"])
             
+            # Extract segment and line references from source document
+            segment_ids = []
+            if "segment_id" in doc.metadata:
+                segment_ids.append(doc.metadata["segment_id"])
+
+            line_ids = []
+            if "line_ids" in doc.metadata:
+                val = doc.metadata["line_ids"]
+                if isinstance(val, list):
+                    line_ids.extend(val)
+
             chunks.append(
                 DocumentChunk(
                     id=f"{uuid.uuid4()}_{i}",
                     content=doc.page_content,
-                    document_id="",  # Set by service layer
+                    document_id="",
                     metadata={
                         "page": doc.metadata.get("page", page_index),
                         "source": doc.metadata.get("source", source),
                         "segment_kind": doc.metadata.get("segment_kind", "paragraph"),
-                        "segment_ids": segment_ids,  # For highlight aggregation
+                        "segment_ids": segment_ids,      # ADDED
+                        "line_ids": line_ids,            # ADDED
                     }
                 )
             )

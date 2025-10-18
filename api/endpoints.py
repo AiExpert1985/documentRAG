@@ -315,52 +315,50 @@ async def get_highlighted_image(
     
     doc_id = payload.get("doc_id")
     page_index = int(payload.get("page_index", -1))
-    seg_ids = payload.get("segment_ids") or []
-    
     if not doc_id or page_index < 0:
-        raise HTTPException(status_code=400, detail="Invalid request")
+        raise HTTPException(status_code=400, detail="Invalid token")
     
+    # Load doc + image
     repo = SQLDocumentRepository(db)
     doc = await repo.get_by_id(doc_id)
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found")
     
     meta = doc.metadata or {}
-    rel = (meta.get("page_image_paths") or {}).get(str(page_index))
-    if not rel:
+    page_images = meta.get("page_image_paths", {})
+    rel_path = page_images.get(str(page_index))
+    if not rel_path:
         raise HTTPException(status_code=404, detail="Page image not found")
     
-    image_path = Path(settings.UPLOADS_DIR) / rel
+    image_path = Path(settings.UPLOADS_DIR) / rel_path
     if not image_path.exists():
         raise HTTPException(status_code=404, detail="Image file missing")
     
+    # Extract lines and segments
+    line_ids = payload.get("line_ids") or []
+    seg_ids  = payload.get("segment_ids") or []
+    
+    page_lines = (meta.get("lines") or {}).get(str(page_index), [])
     page_segments = (meta.get("segments") or {}).get(str(page_index), [])
-
-    for seg in page_segments:
-        logger.info(f"Segment {seg.get('segment_id')}: {len(seg.get('line_ids', []))} lines, bbox: {seg.get('bbox')}")
     
-    # Filter by segment_ids
-    wanted = set(seg_ids)
+    # Build bboxes (prefer lines, fallback to segments)
     bboxes = []
-    for seg in page_segments:
-        if seg.get("segment_id") not in wanted:
-            continue
-        if seg.get("bbox"):
-            bboxes.append(tuple(float(x) for x in seg["bbox"]))
+    if line_ids:
+        lookup = {ln["line_id"]: ln["bbox"] for ln in page_lines}
+        for lid in line_ids:
+            if lid in lookup:
+                bboxes.append(tuple(float(x) for x in lookup[lid]))
+    elif seg_ids:
+        lookup = {sg["segment_id"]: sg["bbox"] for sg in page_segments}
+        for sid in seg_ids:
+            if sid in lookup:
+                bboxes.append(tuple(float(x) for x in lookup[sid]))
     
-    # 🔍 ADD DEBUG LOGS HERE (right after the filter loop):
-    logger.info(f"Token payload: {payload}")
-    logger.info(f"Wanted segment_ids: {seg_ids}")
-    logger.info(f"All page segments: {[s.get('segment_id') for s in page_segments]}")
-    logger.info(f"Page has {len(page_segments)} segments")
-    logger.info(f"Filtered to {len(bboxes)} bboxes")
-    if not bboxes:
-        logger.warning("NO BBOXES MATCHED - returning original image")
-    
-    # Rest of your code...
+    # No highlights → return original image
     if not bboxes:
         return Response(content=image_path.read_bytes(), media_type="image/png")
     
+    # DUMB RENDERER: draw exactly what we give, no merging
     img_bytes = ImageHighlighter.draw_highlights(
         str(image_path),
         bboxes,

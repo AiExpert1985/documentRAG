@@ -137,7 +137,6 @@ class ImageHighlighter:
         t0=time.time()
         img=Image.open(image_path).convert("RGBA"); W,H=img.size
         boxes = normalized_bboxes[: (max_regions or settings.HIGHLIGHT_MAX_REGIONS)]
-        boxes = ImageHighlighter._merge_overlaps(boxes, 0.10)
         overlay=Image.new("RGBA", img.size, (0,0,0,0)); draw=ImageDraw.Draw(overlay, "RGBA")
         for x,y,w,h in boxes:
             if timeout_sec and (time.time()-t0)>timeout_sec: break
