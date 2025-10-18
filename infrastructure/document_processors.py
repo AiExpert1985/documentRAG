@@ -457,23 +457,23 @@ class BaseOCRProcessor(IDocumentProcessor):
         
         return merged
 
-    def _build_chunks(self, docs: List[LangchainDocument]) -> List[DocumentChunk]:
-        """Build final DocumentChunk objects (clean content, no display formatting)."""
-        chunks: List[DocumentChunk] = []
-        for i, doc in enumerate(docs):
-            chunks.append(
-                DocumentChunk(
-                    id=f"{uuid.uuid4()}_{i}",
-                    content=doc.page_content,  # Clean content
-                    document_id="",
-                    metadata={
-                        "page": (doc.metadata or {}).get("page", -1),
-                        "source": (doc.metadata or {}).get("source", ""),
-                        "segment_kind": (doc.metadata or {}).get("segment_kind", "paragraph")
-                    }
-                )
-            )
-        return chunks
+    # def _build_chunks(self, docs: List[LangchainDocument]) -> List[DocumentChunk]:
+    #     """Build final DocumentChunk objects (clean content, no display formatting)."""
+    #     chunks: List[DocumentChunk] = []
+    #     for i, doc in enumerate(docs):
+    #         chunks.append(
+    #             DocumentChunk(
+    #                 id=f"{uuid.uuid4()}_{i}",
+    #                 content=doc.page_content,  # Clean content
+    #                 document_id="",
+    #                 metadata={
+    #                     "page": (doc.metadata or {}).get("page", -1),
+    #                     "source": (doc.metadata or {}).get("source", ""),
+    #                     "segment_kind": (doc.metadata or {}).get("segment_kind", "paragraph")
+    #                 }
+    #             )
+    #         )
+    #     return chunks
     
     async def _segment_paragraphs(self, lines: List[LineRec], page_index: int) -> List[SegmentRec]:
         """Segment paragraphs with safety net for oversized segments."""

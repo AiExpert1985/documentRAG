@@ -109,25 +109,25 @@ class ImageProcessor:
 BBox = Tuple[float,float,float,float]  # normalized [x,y,w,h]
 
 class ImageHighlighter:
-    @staticmethod
-    def _merge_overlaps(bxs: List[BBox], thr: float = 0.10) -> List[BBox]:
-        merged: List[BBox] = []
-        def iou(a,b):
-            ax,ay,aw,ah=a; bx,by,bw,bh=b
-            ax2,ay2, bx2,by2 = ax+aw,ay+ah, bx+bw,by+bh
-            ix1,iy1=max(ax,bx),max(ay,by); ix2,iy2=min(ax2,bx2),min(ay2,by2)
-            if ix2<=ix1 or iy2<=iy1: return 0.0
-            inter=(ix2-ix1)*(iy2-iy1); area=aw*ah + bw*bh - inter
-            return inter/area if area>0 else 0.0
-        for b in bxs:
-            hit=False
-            for i,m in enumerate(merged):
-                if iou(b,m)>=thr:
-                    ax,ay,aw,ah=b; bx,by,bw,bh=m
-                    x1,y1=min(ax,bx),min(ay,by); x2=max(ax+aw,bx+bw); y2=max(ay+ah,by+bh)
-                    merged[i]=(x1,y1,x2-x1,y2-y1); hit=True; break
-            if not hit: merged.append(b)
-        return merged
+    # @staticmethod
+    # def _merge_overlaps(bxs: List[BBox], thr: float = 0.10) -> List[BBox]:
+    #     merged: List[BBox] = []
+    #     def iou(a,b):
+    #         ax,ay,aw,ah=a; bx,by,bw,bh=b
+    #         ax2,ay2, bx2,by2 = ax+aw,ay+ah, bx+bw,by+bh
+    #         ix1,iy1=max(ax,bx),max(ay,by); ix2,iy2=min(ax2,bx2),min(ay2,by2)
+    #         if ix2<=ix1 or iy2<=iy1: return 0.0
+    #         inter=(ix2-ix1)*(iy2-iy1); area=aw*ah + bw*bh - inter
+    #         return inter/area if area>0 else 0.0
+    #     for b in bxs:
+    #         hit=False
+    #         for i,m in enumerate(merged):
+    #             if iou(b,m)>=thr:
+    #                 ax,ay,aw,ah=b; bx,by,bw,bh=m
+    #                 x1,y1=min(ax,bx),min(ay,by); x2=max(ax+aw,bx+bw); y2=max(ay+ah,by+bh)
+    #                 merged[i]=(x1,y1,x2-x1,y2-y1); hit=True; break
+    #         if not hit: merged.append(b)
+    #     return merged
 
     @staticmethod
     def draw_highlights(image_path: str, normalized_bboxes: List[BBox],

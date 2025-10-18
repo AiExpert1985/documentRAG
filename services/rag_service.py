@@ -5,6 +5,7 @@ from typing import List, Dict, Any, Optional, Tuple
 from pathlib import Path
 from uuid import uuid4
 from PIL import Image
+import math
 
 from utils.highlight_token import sign
 
@@ -15,18 +16,18 @@ from utils.highlight_token import sign
 from config import settings
 
 from api.schemas import (
-    PageSearchResultItem, ProcessDocumentResponse, ErrorCode, ProcessingStatus, 
+    ProcessDocumentResponse, ErrorCode, ProcessingStatus, 
     DocumentProcessingError, DocumentsListItem
 )
 from core.domain import DocumentResponseStatus, PageSearchResult
 from core.interfaces import (
-    IDocumentProcessor, IRAGService, IReranker, IVectorStore, IEmbeddingService, 
+    IRAGService, IReranker, IVectorStore, IEmbeddingService, 
     IDocumentRepository, IMessageRepository, IFileStorage, DocumentChunk
 )
 from core.domain import ChunkSearchResult, ProcessedDocument
 from services.document_processor_factory import DocumentProcessorFactory
-from database.session import get_session  # NEW
-from infrastructure.repositories import SQLDocumentRepository  # NEW
+from database.session import get_session
+from infrastructure.repositories import SQLDocumentRepository
 from utils.common import (
     get_file_extension, get_file_hash, sanitize_filename, 
     validate_file_content, validate_uploaded_file
@@ -44,67 +45,43 @@ import asyncio
 logger = logging.getLogger(__name__)
 
 
+# ============ HYBRID SCORING HELPERS (MODULE-LEVEL) ============
 
+def _zscore_normalize(hits, score_attr="score"):
+    """(x - mean) / std → .score_z attribute; handles empty/singleton."""
+    if not hits:
+        return hits
+    vals = [float(getattr(h, score_attr, 0.0) or 0.0) for h in hits]
+    if len(vals) < 2:
+        for h in hits:
+            h.score_z = float(getattr(h, score_attr, 0.0) or 0.0)
+        return hits
+    mean = sum(vals) / len(vals)
+    var  = sum((v - mean) ** 2 for v in vals) / len(vals)
+    std  = math.sqrt(max(var, 1e-12))
+    for h in hits:
+        h.score_z = (float(getattr(h, score_attr, 0.0) or 0.0) - mean) / std
+    return hits
 
-# B) aggregate segment ids for a page's chunk hits
-def _collect_segment_ids_for_page(self, chunk_hits_for_page)->List[str]:
-    s=set()
-    for h in chunk_hits_for_page:
-        s.update((h.chunk.metadata or {}).get("segment_ids", []))
-    return list(s)
+def _sigmoid(x: float) -> float:
+    """Bound to [0,1] with overflow guard."""
+    try:
+        return 1.0 / (1.0 + math.exp(-x))
+    except OverflowError:
+        return 0.0 if x < 0 else 1.0
 
-# C) when building each PageSearchResultItem
-from api.schemas import PageSearchResultItem
-from config import settings
-from utils.highlight_token import sign
-
-def _build_page_result_item(self, page_hit):
-    doc_id = page_hit.document_id
-    page_index = page_hit.page_number
-
-    # Derive required fields your schema enforces
-    document_name = getattr(page_hit, "document_name", None) or getattr(page_hit, "title", None) or doc_id
-    chunk_hits = getattr(page_hit, "chunk_hits", []) or []
-    chunk_count = len(chunk_hits)
-    # Score: take best (max) from chunk hits; fallback 0.0
-    score = max((getattr(h, "score", 0.0) or 0.0) for h in chunk_hits) if chunk_hits else 0.0
-    # Highlights: pick top snippets (truncate defensively)
-    highlights = []
-    for h in chunk_hits[:3]:
-        snip = getattr(h, "snippet", None) or getattr(h, "text", None) or ""
-        highlights.append(snip[:240])
-
-    # Build highlight token (optional)
-    seg_ids = self._collect_segment_ids_for_page(chunk_hits)
-    highlight_token = None
-    if settings.ENABLE_HIGHLIGHT_PREVIEW and seg_ids:
-        highlight_token = sign({
-            "doc_id": doc_id,
-            "page_index": page_index,
-            "segment_ids": seg_ids[: settings.HIGHLIGHT_MAX_REGIONS],
-            "style_id": settings.HIGHLIGHT_STYLE_ID,
-            "source_version": "v1",
-        }, exp_seconds=600)
-
-    # URLs
-    image_url = getattr(page_hit, "image_url", None)
-    thumbnail_url = getattr(page_hit, "thumbnail_url", None)
-    # Provide a stable download URL your API already supports (adjust path to your endpoint)
-    download_url = f"/documents/{doc_id}/download"
-
-    return PageSearchResultItem(
-        document_id=doc_id,
-        document_name=document_name,   # REQUIRED by your schema
-        page_number=page_index,
-        score=score,                   # REQUIRED
-        chunk_count=chunk_count,       # REQUIRED
-        highlights=highlights,         # REQUIRED (list[str])
-        download_url=download_url,     # REQUIRED (str/HttpUrl)
-        image_url=image_url,
-        thumbnail_url=thumbnail_url,
-        segment_ids=seg_ids or None,
-        highlight_token=highlight_token,
-    )
+def _saturating_sum(scores_desc, alpha: float, lam: float, m_cap: int) -> float:
+    """
+    MaxP + diminishing coverage reward:
+      S = s1 + λ * Σ_{i=2..m} (s_i * α^{i-1})
+    Cap at m lines to avoid long-page bias.
+    """
+    if not scores_desc:
+        return 0.0
+    s1   = scores_desc[0]
+    tail = scores_desc[1:m_cap]
+    sat  = sum(s * (alpha ** idx) for idx, s in enumerate(tail, start=1))
+    return s1 + lam * sat
 
 
 class RAGService(IRAGService):
@@ -128,7 +105,6 @@ class RAGService(IRAGService):
         self.embedding_service = embedding_service
         self.file_storage = file_storage
 
-    # A) after saving stored page images, normalize/persist segments
     async def _normalize_and_persist_segments(self, document, geometry_by_page: Dict[int, Dict[str,Any]], page_image_paths: Dict[int,str]):
         segments_meta={}
         for page_idx, geo in geometry_by_page.items():
@@ -705,6 +681,115 @@ class RAGService(IRAGService):
         except Exception as e:
             logger.error(f"[SEARCH] Failed: {e}", exc_info=True)
             return []
+        
+
+    async def retrieve_chunks(self, query: str, top_k: int):
+        """Retrieve top-K chunks by semantic similarity."""
+        emb = await self.embedding_service.generate_query_embedding(query) 
+        try:
+            return await asyncio.wait_for(
+                self.vector_store.search(emb, top_k=top_k),
+                timeout=settings.HYBRID_RETRIEVAL_TIMEOUT_SEC
+            )
+        except asyncio.TimeoutError:
+            logger.warning(f"Chunk retrieval timed out after {settings.HYBRID_RETRIEVAL_TIMEOUT_SEC}s")
+            return []
+
+    async def retrieve_lines(self, query: str, top_k: int):
+        """
+        Retrieve top-K lines by semantic similarity.
+        Includes post-filter defense (length check).
+        """
+        emb = await self.embedding_service.generate_query_embedding(query)
+        try:
+            res = await asyncio.wait_for(
+                self.line_vector_store.search(emb, top_k=top_k),
+                timeout=settings.HYBRID_RETRIEVAL_TIMEOUT_SEC
+            )
+        except asyncio.TimeoutError:
+            logger.warning(f"Line retrieval timed out after {settings.HYBRID_RETRIEVAL_TIMEOUT_SEC}s")
+            return []
+        # Defense in depth: drop tiny lines if any slipped through
+        return [r for r in res if len(getattr(r, "text", "") or "") >= settings.LINE_MIN_CHARS]
+
+    def score_pages(self, query: str, line_hits, chunk_hits):
+        """
+        Hybrid scoring:
+          - z-score per index → sigmoid to [0,1]
+          - Lines: MaxP + saturation (top-m)
+          - Chunks: MaxP
+          - Fuse: if both present β*S_lines+(1-β)*S_chunks; else use whichever exists
+        """
+        alpha = settings.HYBRID_ALPHA
+        lam   = settings.HYBRID_LAMBDA
+        beta  = settings.HYBRID_BETA
+        mcap  = settings.HYBRID_PER_PAGE_LINES
+        cap   = settings.HYBRID_MAX_TOTAL_HITS
+
+        # Cap hits for perf
+        line_hits  = line_hits[:cap]
+        chunk_hits = chunk_hits[:cap]
+
+        # Normalize → bound
+        line_hits  = _zscore_normalize(line_hits, "score")
+        chunk_hits = _zscore_normalize(chunk_hits, "score")
+        for h in line_hits:  h.score_bounded  = _sigmoid(getattr(h, "score_z", 0.0))
+        for h in chunk_hits: h.score_bounded  = _sigmoid(getattr(h, "score_z", 0.0))
+
+        # Group by (doc,page)
+        lines_by_page  = defaultdict(list)
+        for h in line_hits:
+            doc_id   = h.document_id   # fail fast if schema wrong
+            page_idx = int(h.page_index)
+            lines_by_page[(doc_id, page_idx)].append(h)
+
+        chunks_by_page = defaultdict(list)
+        for h in chunk_hits:
+            doc_id   = h.chunk.document_id
+            page_idx = int(h.chunk.metadata.get("page", 0))
+            chunks_by_page[(doc_id, page_idx)].append(h)
+
+        pages = set(lines_by_page.keys()) | set(chunks_by_page.keys())
+
+        ranked = []
+        for (doc_id, page_idx) in pages:
+            L = sorted((h.score_bounded for h in lines_by_page[(doc_id, page_idx)]),  reverse=True)
+            C = sorted((h.score_bounded for h in chunks_by_page[(doc_id, page_idx)]), reverse=True)
+
+            S_lines  = _saturating_sum(L, alpha, lam, mcap) if L else 0.0
+            S_chunks = C[0] if C else 0.0
+
+            if S_lines == 0.0 and S_chunks == 0.0:
+                continue
+            elif S_lines == 0.0:
+                S_page, source = S_chunks, "chunks_only"
+            elif S_chunks == 0.0:
+                S_page, source = S_lines, "lines_only"
+            else:
+                S_page, source = (beta * S_lines + (1.0 - beta) * S_chunks), "hybrid"
+
+            ranked.append({
+                "document_id": doc_id,
+                "page_index": page_idx,
+                "score": S_page,
+                "source": source,
+                "evidence": {
+                    "lines":  lines_by_page[(doc_id, page_idx)],
+                    "chunks": chunks_by_page[(doc_id, page_idx)],
+                }
+            })
+
+        ranked.sort(key=lambda x: x["score"], reverse=True)
+
+        if settings.ENABLE_HYBRID_TELEMETRY and ranked:
+            top = ranked[0]
+            logger.info(
+                f"[HYBRID] Winner doc={top['document_id']} page={top['page_index']} "
+                f"score={top['score']:.3f} source={top['source']} "
+                f"lines={len(top['evidence']['lines'])} chunks={len(top['evidence']['chunks'])}"
+            )
+
+        return ranked
 
  
  
@@ -844,149 +929,93 @@ class RAGService(IRAGService):
         
 
     async def search_pages(self, query: str, top_k: int = 5) -> List[PageSearchResult]:
-        """Search and return page-level results with images (UI-ready)."""
+        """
+        Hybrid search: lines + chunks → score pages → build UI-ready results
+        with line-aware highlight tokens.
+        """
         try:
-            # Overfetch chunks, then aggregate to pages
-            chunk_results = await self.search_chunks(query, top_k=top_k * 3)
-            if not chunk_results:
-                logger.info(f"[SEARCH-PAGES] No chunks for: {query[:60]}")
+            # 1) Parallel retrieval (uses caps/timeouts from config)
+            line_hits, chunk_hits = await asyncio.gather(
+                self.retrieve_lines(query, settings.HYBRID_TOP_LINES),
+                self.retrieve_chunks(query, settings.HYBRID_TOP_CHUNKS)
+            )
+
+            if not line_hits and not chunk_hits:
+                logger.info(f"[HYBRID-SEARCH] No hits for query: {query[:60]}")
                 return []
 
-            page_results = await self._aggregate_chunks_to_pages(query, chunk_results, top_k)
+            # 2) Page scoring (z-score → sigmoid, saturating lines, MaxP chunks, fusion)
+            ranked_pages = self.score_pages(query, line_hits, chunk_hits)
+            if not ranked_pages:
+                return []
 
-            return page_results
+            # 3) Build results (UI-ready + highlight token)
+            results: List[PageSearchResult] = []
+            for page_data in ranked_pages[:top_k]:
+                doc_id   = page_data["document_id"]
+                page_idx = page_data["page_index"]
+
+                doc = await self.document_repo.get_by_id(doc_id)
+                if not doc:
+                    continue
+
+                meta = doc.metadata or {}
+                page_images = meta.get("page_image_paths", {})
+                if str(page_idx) in page_images:
+                    image_url     = f"/page-image/{doc_id}/{page_idx}"
+                    thumbnail_url = f"/page-image/{doc_id}/{page_idx}?size=thumbnail"
+                else:
+                    image_url, thumbnail_url = "", ""
+
+                # Text snippets from chunk evidence
+                chunk_evidence = page_data["evidence"]["chunks"]
+                highlights: List[str] = []
+                for h in chunk_evidence[:3]:
+                    txt = getattr(h.chunk, "content", "") if hasattr(h, "chunk") else ""
+                    highlights.append(txt[:150] + ("..." if len(txt) > 150 else ""))
+
+                # Prefer line IDs; fall back to segments only if needed
+                line_ids = self._select_line_ids_for_token(chunk_evidence)
+                seg_ids  = [] if line_ids else self._select_segment_ids_for_token(chunk_evidence)
+
+                if settings.ENABLE_HYBRID_TELEMETRY and seg_ids and not line_ids:
+                    logger.info(f"[HIGHLIGHT] Fallback to segments for doc={doc_id} page={page_idx}")
+
+                highlight_token = None
+                if settings.ENABLE_HIGHLIGHT_PREVIEW and (line_ids or seg_ids):
+                    payload = {
+                        "doc_id": doc_id,
+                        "page_index": page_idx,
+                        "style_id": settings.HIGHLIGHT_STYLE_ID,
+                    }
+                    if line_ids:
+                        payload["line_ids"] = line_ids
+                    elif seg_ids:
+                        payload["segment_ids"] = seg_ids
+                    highlight_token = sign(payload, exp_seconds=600)
+
+                results.append(PageSearchResult(
+                    document_id=doc_id,
+                    document_name=doc.filename,
+                    page_number=page_idx,
+                    score=round(page_data["score"], 3),
+                    chunk_count=len(chunk_evidence),
+                    image_url=image_url,
+                    thumbnail_url=thumbnail_url,
+                    highlights=highlights,
+                    download_url=f"/download/{doc_id}",
+                    segment_ids=seg_ids or None,
+                    highlight_token=highlight_token,
+                ))
+            return results
 
         except Exception as e:
-            logger.error(f"[SEARCH-PAGES] Failed: {e}", exc_info=True)
+            logger.error(f"[HYBRID-SEARCH] Failed: {e}", exc_info=True)
             return []
 
     async def search(self, query: str, top_k: int = 5) -> List[PageSearchResult]:
         """Alias: default to page-level results."""
         return await self.search_pages(query, top_k)
-
-    async def _aggregate_chunks_to_pages(
-        self,
-        query: str,
-        chunk_results: List[ChunkSearchResult],
-        top_k: int
-    ) -> List[PageSearchResult]:
-        """Group chunks by (document_id, page), score with MaxP, build highlights, and attach image URLs."""
-        groups = defaultdict(list)
-        for r in chunk_results:
-            key = (r.chunk.document_id, int(r.chunk.metadata.get("page", 0)))
-            groups[key].append(r)
-
-        pages: List[PageSearchResult] = []
-        highlight_stats = {"pages_with_highlights": 0, "total_pages": 0}  # NEW: Telemetry
-
-        for (doc_id, page_num), items in groups.items():
-            if not items:
-                continue
-
-            highlight_stats["total_pages"] += 1  # NEW: Count all pages
-
-            # Scoring: MaxP (primary)
-            max_score = max((it.score for it in items), default=0.0)
-
-            # Highlights (lexical-first, fallback to excerpt)
-            highlights = self._extract_highlights(query, items, max_count=3)
-            if not highlights:
-                best = max(items, key=lambda x: x.score)
-                c = best.chunk.content
-                highlights = [c[:150] + ("..." if len(c) > 150 else "")]
-
-            # Image paths (already attached during processing)
-            image_path = items[0].chunk.metadata.get("image_path", "")
-            thumb_path = items[0].chunk.metadata.get("thumbnail_path", "")
-
-            if image_path:
-                image_url = f"/page-image/{doc_id}/{page_num}"
-                thumbnail_url = f"/page-image/{doc_id}/{page_num}?size=thumbnail"
-            else:
-                image_url = ""
-                thumbnail_url = ""
-
-            doc_name = items[0].chunk.metadata.get("document_name", "Unknown")
-
-            # ========== PRODUCTION-READY SEGMENT COLLECTION ==========
-            # 1. Filter and sort chunks by relevance
-            relevant_chunks = [
-                item for item in items 
-                if item.score >= settings.HIGHLIGHT_SCORE_THRESHOLD
-            ]
-            
-            # 2. Cap at chunk level (not segment level) for efficiency
-            relevant_chunks = sorted(
-                relevant_chunks, 
-                key=lambda x: x.score, 
-                reverse=True
-            )[:settings.HIGHLIGHT_MAX_REGIONS]
-
-            # 3. Collect segments from capped relevant chunks
-            if relevant_chunks:
-                seg_ids_set = {
-                    seg_id 
-                    for item in relevant_chunks 
-                    for seg_id in (item.chunk.metadata.get("segment_ids") or [])
-                }
-                
-                # In your search results loop, where you build highlight_token:
-            # Use line-based selection with segment fallback
-            line_ids = self._select_line_ids_for_token(items)  # items = chunk hits for this page
-            seg_ids  = [] if line_ids else self._select_segment_ids_for_token(items)
-
-            # Telemetry: log when fallback happens
-            if settings.ENABLE_HYBRID_TELEMETRY and seg_ids and not line_ids:
-                logger.info(
-                    f"[HIGHLIGHT] Fallback to segments for doc={doc_id} page={page_num} "
-                    f"(no lines passed threshold or unavailable)"
-                )
-            
-            if line_ids or seg_ids:
-                highlight_stats["pages_with_highlights"] += 1
-            else:
-                # No highlights available
-                logger.info(
-                    f"Page {doc_id}:{page_num}: No highlights available. "
-                    f"Max score: {max_score:.3f}. Total chunks: {len(items)}"
-                )
-            # ========== END PRODUCTION-READY SEGMENT COLLECTION ==========
-
-            # 5. Build highlight token (explicit None if no segments)
-            highlight_token = None
-            if settings.ENABLE_HIGHLIGHT_PREVIEW and seg_ids:
-                highlight_token = sign({
-                    "doc_id": doc_id,
-                    "page_index": page_num,
-                    "segment_ids": seg_ids,  # Already capped and sorted
-                    "style_id": settings.HIGHLIGHT_STYLE_ID,
-                    "v": 1,
-                }, exp_seconds=600)
-
-            pages.append(PageSearchResult(
-                document_id=doc_id,
-                document_name=doc_name,
-                page_number=page_num,
-                score=max_score,
-                chunk_count=len(items),
-                image_url=image_url,
-                thumbnail_url=thumbnail_url,
-                highlights=highlights,
-                download_url=f"/download/{doc_id}",
-                segment_ids=seg_ids or None,  # Explicit None if empty
-                highlight_token=highlight_token,
-            ))
-
-        # NEW: Log highlight coverage metric
-        if highlight_stats["total_pages"] > 0:
-            coverage = (highlight_stats["pages_with_highlights"] / highlight_stats["total_pages"]) * 100
-            logger.info(
-                f"[HIGHLIGHT] Query coverage: {highlight_stats['pages_with_highlights']}/{highlight_stats['total_pages']} "
-                f"pages ({coverage:.1f}%) have highlights at threshold {settings.HIGHLIGHT_SCORE_THRESHOLD}"
-            )
-
-        pages.sort(key=lambda p: (p.score, p.chunk_count), reverse=True)
-        return pages[:top_k]
 
     def _extract_highlights(
         self,
@@ -1148,211 +1177,3 @@ class RAGService(IRAGService):
         
         ordered = sorted(seg_scores.items(), key=lambda kv: (-kv[1], kv[0]))
         return [sid for sid, _ in ordered[:settings.HIGHLIGHT_MAX_REGIONS]]
-
-
-
-
-
-import math
-from collections import defaultdict
-
-def _zscore_normalize(hits, score_attr="score"):
-    """
-    Z-score normalization: (x - mean) / std.
-    Handles edge cases (empty, single value).
-    Adds .score_z attribute to each hit.
-    """
-    if not hits:
-        return hits
-    
-    vals = [float(getattr(h, score_attr, 0.0) or 0.0) for h in hits]
-    
-    if len(vals) < 2:
-        for h in hits:
-            h.score_z = float(getattr(h, score_attr, 0.0) or 0.0)
-        return hits
-    
-    mean = sum(vals) / len(vals)
-    var = sum((v - mean) ** 2 for v in vals) / len(vals)
-    std = math.sqrt(max(var, 1e-12))
-    
-    for h in hits:
-        h.score_z = (float(getattr(h, score_attr, 0.0) or 0.0) - mean) / std
-    
-    return hits
-
-def _sigmoid(x: float) -> float:
-    """
-    Sigmoid: 1 / (1 + e^-x).
-    Bounds normalized scores to [0,1].
-    """
-    try:
-        return 1.0 / (1.0 + math.exp(-x))
-    except OverflowError:
-        return 0.0 if x < 0 else 1.0
-
-def _saturating_sum(scores_desc, alpha: float, lam: float, m_cap: int) -> float:
-    """
-    MaxP + diminishing coverage reward.
-    
-    Formula: S = max_score + λ * Σ(score_i * α^i) for i=1..m
-    
-    Why:
-    - max_score: ensures top line always contributes fully
-    - α^i: exponential decay prevents long pages from dominating
-    - λ: controls coverage vs precision trade-off
-    - m_cap: hard limit on contributing lines per page
-    
-    Example: [0.9, 0.8, 0.7] with α=0.7, λ=0.9, m=3
-    → 0.9 + 0.9 * (0.8*0.7 + 0.7*0.49) = 0.9 + 0.9 * 0.903 = 1.71
-    """
-    if not scores_desc:
-        return 0.0
-    
-    s1 = scores_desc[0]
-    tail = scores_desc[1:m_cap]
-    sat = sum(s * (alpha ** idx) for idx, s in enumerate(tail, start=1))
-    
-    return s1 + lam * sat
-
-
-import asyncio
-
-async def retrieve_chunks(self, query: str, top_k: int):
-    """Retrieve top-K chunks by semantic similarity."""
-    emb = await self.embedding_service.embed_query(query)
-    
-    try:
-        return await asyncio.wait_for(
-            self.vector_store.query(emb, top_k=top_k),
-            timeout=settings.HYBRID_RETRIEVAL_TIMEOUT_SEC
-        )
-    except asyncio.TimeoutError:
-        logger.warning(f"Chunk retrieval timed out after {settings.HYBRID_RETRIEVAL_TIMEOUT_SEC}s")
-        return []
-
-async def retrieve_lines(self, query: str, top_k: int):
-    """
-    Retrieve top-K lines by semantic similarity.
-    Includes post-filter defense (length check).
-    """
-    emb = await self.embedding_service.embed_query(query)
-    
-    try:
-        res = await asyncio.wait_for(
-            self.line_vector_store.query(emb, top_k=top_k),
-            timeout=settings.HYBRID_RETRIEVAL_TIMEOUT_SEC
-        )
-    except asyncio.TimeoutError:
-        logger.warning(f"Line retrieval timed out after {settings.HYBRID_RETRIEVAL_TIMEOUT_SEC}s")
-        return []
-    
-    # Defense in depth: drop short lines if any slipped through
-    return [r for r in res if len(getattr(r, "text", "") or "") >= settings.LINE_MIN_CHARS]
-
-
-def score_pages(self, query: str, line_hits, chunk_hits):
-    """
-    Hybrid page scoring strategy.
-    
-    Process:
-    1. Z-score normalize per index (lines, chunks separately)
-    2. Bound via sigmoid to [0,1]
-    3. Lines→page: MaxP + saturation (top-m lines)
-    4. Chunks→page: MaxP
-    5. Fuse with β weight when both present
-    
-    Edge cases:
-    - Only lines: use S_lines fully
-    - Only chunks: use S_chunks fully
-    - Both: β*S_lines + (1-β)*S_chunks
-    
-    Returns: list of {document_id, page_index, score, evidence:{lines, chunks}}
-    """
-    alpha = settings.HYBRID_ALPHA
-    lam   = settings.HYBRID_LAMBDA
-    beta  = settings.HYBRID_BETA
-    mcap  = settings.HYBRID_PER_PAGE_LINES
-    max_hits = settings.HYBRID_MAX_TOTAL_HITS
-    
-    # Cap total hits before normalization (perf guard)
-    line_hits = line_hits[:max_hits]
-    chunk_hits = chunk_hits[:max_hits]
-    
-    # Normalize per index and bound
-    line_hits  = _zscore_normalize(line_hits, "score")
-    chunk_hits = _zscore_normalize(chunk_hits, "score")
-    
-    for h in line_hits:
-        h.score_bounded = _sigmoid(getattr(h, "score_z", 0.0))
-    for h in chunk_hits:
-        h.score_bounded = _sigmoid(getattr(h, "score_z", 0.0))
-    
-    # Group by page (FAIL-FAST: validate required attrs)
-    lines_by_page = defaultdict(list)
-    for h in line_hits:
-        # Fail-fast: if schema wrong, exception is better than silent None
-        doc_id = h.document_id  # AttributeError if missing
-        page_idx = int(h.page_index)
-        lines_by_page[(doc_id, page_idx)].append(h)
-    
-    chunks_by_page = defaultdict(list)
-    for h in chunk_hits:
-        doc_id = h.chunk.document_id
-        page_idx = int(h.chunk.metadata.get("page", 0))
-        chunks_by_page[(doc_id, page_idx)].append(h)
-    
-    all_pages = set(lines_by_page.keys()) | set(chunks_by_page.keys())
-    
-    ranked = []
-    for (doc_id, page_idx) in all_pages:
-        L = sorted([h.score_bounded for h in lines_by_page[(doc_id, page_idx)]], reverse=True)
-        C = sorted([h.score_bounded for h in chunks_by_page[(doc_id, page_idx)]], reverse=True)
-        
-        S_lines = _saturating_sum(L, alpha, lam, mcap) if L else 0.0
-        S_chunks = C[0] if C else 0.0
-        
-        # Edge case handling with explicit branches
-        if S_lines == 0.0 and S_chunks == 0.0:
-            continue
-        elif S_lines == 0.0:
-            S_page = S_chunks
-            source = "chunks_only"
-        elif S_chunks == 0.0:
-            S_page = S_lines
-            source = "lines_only"
-        else:
-            S_page = beta * S_lines + (1.0 - beta) * S_chunks
-            source = "hybrid"
-        
-        ranked.append({
-            "document_id": doc_id,
-            "page_index": page_idx,
-            "score": S_page,
-            "source": source,  # for telemetry
-            "evidence": {
-                "lines": lines_by_page[(doc_id, page_idx)],
-                "chunks": chunks_by_page[(doc_id, page_idx)]
-            }
-        })
-    
-    ranked.sort(key=lambda x: x["score"], reverse=True)
-    
-    # Telemetry
-    if settings.ENABLE_HYBRID_TELEMETRY and ranked:
-        winner = ranked[0]
-        logger.info(
-            f"[HYBRID] Winner doc={winner['document_id']} page={winner['page_index']} "
-            f"score={winner['score']:.3f} source={winner['source']} "
-            f"lines={len(winner['evidence']['lines'])} chunks={len(winner['evidence']['chunks'])}"
-        )
-        
-        # Count distribution
-        sources = defaultdict(int)
-        for r in ranked[:10]:  # top 10 pages
-            sources[r['source']] += 1
-        logger.info(f"[HYBRID] Top-10 sources: {dict(sources)}")
-    
-    return ranked
-
-
