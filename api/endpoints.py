@@ -15,6 +15,7 @@ Before production deployment:
 ==================================
 """
 
+import asyncio
 from fastapi import APIRouter, HTTPException, Response, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 from pathlib import Path
@@ -383,6 +384,21 @@ async def get_highlighted_image(
     # No highlights → return original image
     if not bboxes:
         return Response(content=image_path.read_bytes(), media_type="image/png")
+
+    # ✅ Draw highlights and return (offload CPU work to thread pool)
+    img_bytes = await asyncio.to_thread(
+        ImageHighlighter.draw_highlights,
+        image_path=str(image_path),
+        normalized_bboxes=bboxes,
+        max_regions=settings.HIGHLIGHT_MAX_REGIONS,
+        timeout_sec=settings.HIGHLIGHT_TIMEOUT_SEC
+    )
+
+    return Response(
+        content=img_bytes,
+        media_type="image/webp",
+        headers={"Cache-Control": "public, max-age=3600"}
+    )
 
 
 # ---------- Serve page image (original or thumbnail) ----------
